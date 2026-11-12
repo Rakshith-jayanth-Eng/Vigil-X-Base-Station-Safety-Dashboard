@@ -5,14 +5,12 @@ import {
   Activity,
   Flame,
   ShieldAlert,
-  RotateCcw,
   Play,
   Pause,
   ArrowRight,
-  CheckCircle2,
-  AlertTriangle,
   Wifi,
   Sparkles,
+  Zap,
 } from 'lucide-react';
 
 export const InteractiveSimulator: React.FC = () => {
@@ -34,192 +32,154 @@ export const InteractiveSimulator: React.FC = () => {
     motionState: 'MOVING',
   };
 
-  type StoryKey = 'fall' | 'gas' | 'recovery' | 'offline' | 'compound' | 'fault';
-  const [activeStory, setActiveStory] = useState<StoryKey | null>(null);
+  type StoryKey = 'compound' | 'fall' | 'gas' | 'fade' | 'burst' | 'fault';
+  const [activeStory, setActiveStory] = useState<StoryKey | null>('compound');
   const [currentStep, setCurrentStep] = useState<number>(0);
   const [isPlayingAuto, setIsPlayingAuto] = useState<boolean>(false);
+  const [chaosMode, setChaosMode] = useState<boolean>(false);
 
   // Stories definitions with plain-English steps
   const stories = {
+    compound: {
+      title: '🚨 Compound Hazard: Toxic Gas Leak + Fall Impact + Radio Fade',
+      badge: 'Compound Multi-Hazard',
+      steps: [
+        {
+          title: '01. Normal Subterranean Operations',
+          description: 'Worker 01 is walking through Sub-level Vault 4B. The wearable Arduino reads 1.0g gravity and steady motion.',
+          action: () => simulateScenario('normal', 'WORKER_01'),
+        },
+        {
+          title: '02. Methane Seal Failure Occurs',
+          description: 'A pipe flange ruptures. Toxic hydrocarbon gas fills the vault (MQ-2 ADC spikes to 795).',
+          action: () => simulateScenario('gas_hazard', 'WORKER_01'),
+        },
+        {
+          title: '03. Worker Collapses from Acute Asphyxiation',
+          description: 'Worker suffers severe hypoxia, collapsing to the floor. High-G impact (2.85g) triggers verification countdown.',
+          action: () => simulateScenario('possible_fall', 'WORKER_01'),
+        },
+        {
+          title: '04. Unconscious Immobility Confirmed in Toxic Gas',
+          description: '10 seconds elapsed without motion. Arduino confirms COMPOUND_HAZARD (Worker unconscious in toxic gas).',
+          action: () => simulateScenario('compound_hazard', 'WORKER_01'),
+        },
+        {
+          title: '05. Surface Base Station Flashes Critical Klaxon',
+          description: 'Base station sounds dual 880Hz/440Hz alert. Operator deploys SCBA rescue squad with 60-second alarm snooze.',
+          action: () => {},
+        },
+      ],
+    },
     fall: {
-      title: '🚨 Scenario A: Worker Falls & Becomes Unconscious (Man-Down)',
+      title: '🚨 Fall & Immobility: Slip, Trip & Sustained Unconsciousness',
       badge: 'Fall & Immobility',
       steps: [
         {
-          title: 'Normal Operations Underground',
-          description: 'Worker 01 is walking through Sub-level Vault 4B. The wearable Arduino reads 1.0g gravity and steady motion.',
+          title: '01. Steady Movement Along Scaffolding',
+          description: 'Worker 01 walks normally. Inertial vectors report 1.0g baseline gravity.',
           action: () => simulateScenario('normal', 'WORKER_01'),
-          highlight: 'worker_moving',
         },
         {
-          title: 'Worker Slips and Hits Ground',
-          description: 'A sudden impact spike (2.85g) is detected by the MPU6050 accelerometer. The worker stops moving.',
+          title: '02. Slip and Violent Floor Impact',
+          description: 'MPU6050 accelerometer registers 2.85g spike. Worker stops moving.',
           action: () => simulateScenario('possible_fall', 'WORKER_01'),
-          highlight: 'worker_fallen',
         },
         {
-          title: 'Autonomous Verification Countdown',
-          description: 'The Arduino starts a 10-second timer. If the worker gets up, it cancels. If they stay motionless, it confirms an emergency.',
+          title: '03. Autonomous Verification Countdown',
+          description: 'Arduino starts 10-second timer. If worker gets back up, it cancels. If immobile, it escalates.',
           action: () => {},
-          highlight: 'timer',
         },
         {
-          title: 'Man-Down Confirmed & LoRa Broadcast',
-          description: '10 seconds elapsed without motion! The Arduino confirms MAN DOWN and broadcasts a 433MHz LoRa packet through the ground.',
+          title: '04. MAN-DOWN Alert Dispatched via LoRa',
+          description: '10 seconds elapsed without motion. Arduino transmits MAN_DOWN packet to surface.',
           action: () => simulateScenario('man_down', 'WORKER_01'),
-          highlight: 'lora_wave',
-        },
-        {
-          title: 'Base Station Alarm Sounds',
-          description: 'The surface computer receives the packet within 1 second. The operator clicks Acknowledge to deploy the rescue team.',
-          action: () => {},
-          highlight: 'base_station',
         },
       ],
     },
     gas: {
-      title: '🔥 Scenario B: Hazardous Gas / Methane Leak Detected',
+      title: '🔥 Atmospheric Hazard: Dangerous Hydrocarbon Gas Leak',
       badge: 'Toxic Gas Leak',
       steps: [
         {
-          title: 'Clean Ambient Air',
-          description: 'Underground air is safe. The MQ-2 sensor reports raw reading ~315 (well under the 500 danger line).',
+          title: '01. Safe Baseline Atmosphere',
+          description: 'MQ-2 reports 318 ADC units, well below the 500 threshold limit.',
           action: () => simulateScenario('normal', 'WORKER_01'),
-          highlight: 'worker_moving',
         },
         {
-          title: 'Gas Leak Occurs in Tunnel',
-          description: 'A pipe seal cracks. Methane gas rapidly enters the shaft. MQ-2 analog reading spikes to 742!',
+          title: '02. Gas Concentration Surpasses Threshold',
+          description: 'Methane enters excavation vault. MQ-2 sensor spikes to 742 ADC.',
           action: () => simulateScenario('gas_hazard', 'WORKER_01'),
-          highlight: 'gas_leak',
         },
         {
-          title: 'Arduino Detects Danger Instantly',
-          description: 'Because 742 > 500, the wearable Arduino immediately triggers a GAS HAZARD state without waiting for cloud processing.',
+          title: '03. Base Station Pulls PubChem Toxicology',
+          description: 'Vigil-X loads IDLH limits, mandatory SCBA PPE requirements, and evacuation radius.',
           action: () => {},
-          highlight: 'arduino_decision',
-        },
-        {
-          title: 'Emergency Radio Packet Received',
-          description: 'The LoRa radio delivers the alert to the surface in milliseconds. The base-station banner flashes red with exact gas readings.',
-          action: () => {},
-          highlight: 'base_station',
         },
       ],
     },
-    recovery: {
-      title: '✅ Scenario C: False Alarm / Worker Stumbles & Recovers',
-      badge: 'Fall Self-Recovery',
+    fade: {
+      title: '⚫ RF Link Degradation: Deep Gallery Radio Fade',
+      badge: 'Signal Loss & Carrier Fade',
       steps: [
         {
-          title: 'Worker Trips on Rubble',
-          description: 'Impact spike triggers the verification countdown timer. System enters Warning mode.',
-          action: () => simulateScenario('possible_fall', 'WORKER_01'),
-          highlight: 'timer',
-        },
-        {
-          title: 'Worker Stands Back Up',
-          description: 'Worker recovers their footing and starts moving again. The MPU6050 detects motion vectors.',
-          action: () => simulateScenario('recovery', 'WORKER_01'),
-          highlight: 'worker_moving',
-        },
-        {
-          title: 'System Automatically Resets to Safe',
-          description: 'The Arduino verifies the worker is active and healthy. Status returns to NORMAL without false emergency panic.',
-          action: () => {},
-          highlight: 'safe',
-        },
-      ],
-    },
-    offline: {
-      title: '⚫ Scenario D: Worker Enters Deep Vault / Radio Lost',
-      badge: 'Signal Loss vs Emergency',
-      steps: [
-        {
-          title: 'Healthy Radio Carrier',
-          description: 'Heartbeat packets arrive every few seconds with RSSI -82 dBm.',
+          title: '01. Strong RF Link (-81 dBm)',
+          description: 'LoRa 433MHz carrier operating with high SNR (+8.5 dB).',
           action: () => simulateScenario('normal', 'WORKER_01'),
-          highlight: 'lora_wave',
         },
         {
-          title: 'Worker Steps Behind Thick Lead Door',
-          description: 'Radio waves are blocked. No packets arrive for 30 seconds.',
+          title: '02. Worker Steps into Heavy Concrete Sump',
+          description: 'Signal fades to -115 dBm with negative SNR (-4.2 dB).',
+          action: () => simulateScenario('radio_fade', 'WORKER_01'),
+        },
+        {
+          title: '03. Communication Timeout Distinguishes Offline from Fall',
+          description: 'No packet received for 30s. Node flagged as OFFLINE without false fall claims.',
           action: () => simulateScenario('offline', 'WORKER_01'),
-          highlight: 'offline_lost',
-        },
-        {
-          title: 'Communication Failure Flagged (Not False Fall)',
-          description: 'The dashboard marks the worker OFFLINE rather than claiming a medical emergency, keeping rescue info accurate.',
-          action: () => {},
-          highlight: 'base_station',
         },
       ],
     },
-    compound: {
-      title: '🚨 Scenario E: DUAL COMPOUND HAZARD (Fall + Gas Leak)',
-      badge: 'Unconscious in Toxic Gas',
+    burst: {
+      title: '⚡ Fleet Stress: Multi-Worker Telemetry Burst',
+      badge: 'High-Density Traffic',
       steps: [
         {
-          title: 'Worker Falls in Confined Tunnel',
-          description: 'Impact spike triggers possible fall. Worker remains motionless.',
-          action: () => simulateScenario('possible_fall', 'WORKER_01'),
-          highlight: 'worker_fallen',
+          title: '01. All Workers Transmit Simultaneously',
+          description: 'Simulates heavy LoRa channel contention across WORKER_01, WORKER_02, and WORKER_03.',
+          action: () => simulateScenario('burst_stress'),
         },
         {
-          title: 'Immobility Confirmed (MAN DOWN)',
-          description: '10-second timer expires. Arduino flags worker as MAN DOWN.',
-          action: () => simulateScenario('man_down', 'WORKER_01'),
-          highlight: 'timer',
-        },
-        {
-          title: 'Simultaneous Gas Leak Occurs',
-          description: 'Methane fills tunnel (MQ-2 ADC spikes to 760). Worker is unconscious and cannot evacuate!',
-          action: () => simulateScenario('compound_hazard', 'WORKER_01'),
-          highlight: 'gas_leak',
-        },
-        {
-          title: 'Highest Priority Emergency Alarm',
-          description: 'System triggers COMPOUND_HAZARD. Base station flashes red and amber dual sirens for maximum rescue priority.',
+          title: '02. Base Station Demultiplexes Stream',
+          description: 'Packet parser decodes interleaved packets without buffer corruption.',
           action: () => {},
-          highlight: 'base_station',
         },
       ],
     },
     fault: {
-      title: '⚠️ Scenario F: Sensor Disconnection / Hardware Fault',
-      badge: 'Hardware Fault Detection',
+      title: '⚠️ Hardware Fault: Broken Sensor Lead Detection',
+      badge: 'Sensor Fault',
       steps: [
         {
-          title: 'Normal Operation',
-          description: 'Sensor wires secure. Normal heartbeat telemetry arriving.',
-          action: () => simulateScenario('normal', 'WORKER_01'),
-          highlight: 'worker_moving',
-        },
-        {
-          title: 'Sensor Wire Disconnects Underground',
-          description: 'MQ-2 analog pin loses contact. Arduino transmits SENSOR_FAULT packet.',
+          title: '01. Physical Wire Disconnection',
+          description: 'MQ-2 analog wire breaks in transit, yielding NaN / out-of-range ADC.',
           action: () => simulateScenario('sensor_fault', 'WORKER_01'),
-          highlight: 'gas_leak',
         },
         {
-          title: 'System Flags Warning Without Forging Safe Data',
-          description: 'The dashboard displays SENSOR FAULT instead of silently assuming clean air, preventing dangerous false security.',
+          title: '02. Honest SENSOR_FAULT Indicator',
+          description: 'Dashboard flags SENSOR FAULT rather than falsely reporting clean air.',
           action: () => {},
-          highlight: 'base_station',
         },
       ],
     },
   };
 
-  // Start a story
-  const startStory = (key: 'fall' | 'gas' | 'recovery' | 'offline' | 'compound' | 'fault') => {
+  const startStory = (key: StoryKey) => {
     setActiveStory(key);
     setCurrentStep(0);
     stories[key].steps[0].action();
     setIsPlayingAuto(false);
   };
 
-  // Step next
   const goToNextStep = () => {
     if (!activeStory) return;
     const story = stories[activeStory];
@@ -232,7 +192,6 @@ export const InteractiveSimulator: React.FC = () => {
     }
   };
 
-  // Step prev
   const goToPrevStep = () => {
     if (!activeStory) return;
     const story = stories[activeStory];
@@ -243,7 +202,6 @@ export const InteractiveSimulator: React.FC = () => {
     }
   };
 
-  // Auto-play timer
   useEffect(() => {
     if (!isPlayingAuto || !activeStory) return;
     const story = stories[activeStory];
@@ -261,6 +219,26 @@ export const InteractiveSimulator: React.FC = () => {
     return () => clearTimeout(timer);
   }, [isPlayingAuto, currentStep, activeStory]);
 
+  // Chaos injection generator
+  useEffect(() => {
+    if (!chaosMode) return;
+    const interval = setInterval(() => {
+      const scenarios: Array<'normal' | 'gas_hazard' | 'possible_fall' | 'man_down' | 'compound_hazard' | 'radio_fade'> = [
+        'normal',
+        'gas_hazard',
+        'possible_fall',
+        'man_down',
+        'compound_hazard',
+        'radio_fade',
+      ];
+      const randomScenario = scenarios[Math.floor(Math.random() * scenarios.length)];
+      const randomWorker = workers[Math.floor(Math.random() * workers.length)]?.id || 'WORKER_01';
+      simulateScenario(randomScenario, randomWorker);
+    }, 4000);
+
+    return () => clearInterval(interval);
+  }, [chaosMode, workers, simulateScenario]);
+
   const activeStoryData = activeStory ? stories[activeStory] : null;
   const currentStepData = activeStoryData ? activeStoryData.steps[currentStep] : null;
 
@@ -274,92 +252,105 @@ export const InteractiveSimulator: React.FC = () => {
               <Sparkles className="w-4 h-4" />
             </span>
             <h2 className="text-base sm:text-lg font-bold text-white tracking-wide">
-              Interactive Hardware Simulation & Demonstration Lab
+              Hardware Simulation & Emergency Stress Lab
             </h2>
           </div>
           <p className="text-xs sm:text-sm text-slate-400 mt-1">
-            Pick a scenario below to watch how the physical sensors, Arduino microcontroller, and LoRa wireless link respond in real time.
+            Execute mission-critical emergency scenarios to stress-test the state machine, Web Serial decoder, and audio alert pipelines.
           </p>
         </div>
 
-        {/* Scenario Selection Buttons */}
-        <div className="flex items-center gap-1.5 flex-wrap">
+        {/* Chaos Mode Toggle */}
+        <div className="flex items-center gap-2">
           <button
-            onClick={() => startStory('fall')}
-            className={`px-3 py-1.5 rounded text-xs font-semibold border transition-all ${
-              activeStory === 'fall'
-                ? 'bg-rose-600 text-white border-rose-500 shadow-md'
+            onClick={() => setChaosMode(!chaosMode)}
+            className={`px-3 py-1.5 rounded text-xs font-mono font-bold flex items-center gap-1.5 transition-colors border ${
+              chaosMode
+                ? 'bg-rose-600 text-white border-rose-500 animate-pulse'
                 : 'bg-slate-800 text-slate-300 border-slate-700 hover:bg-slate-700'
             }`}
           >
-            🚨 Fall & Man-Down
-          </button>
-          <button
-            onClick={() => startStory('gas')}
-            className={`px-3 py-1.5 rounded text-xs font-semibold border transition-all ${
-              activeStory === 'gas'
-                ? 'bg-rose-600 text-white border-rose-500 shadow-md'
-                : 'bg-slate-800 text-slate-300 border-slate-700 hover:bg-slate-700'
-            }`}
-          >
-            🔥 Toxic Gas Leak
-          </button>
-          <button
-            onClick={() => startStory('recovery')}
-            className={`px-3 py-1.5 rounded text-xs font-semibold border transition-all ${
-              activeStory === 'recovery'
-                ? 'bg-emerald-600 text-white border-emerald-500 shadow-md'
-                : 'bg-slate-800 text-slate-300 border-slate-700 hover:bg-slate-700'
-            }`}
-          >
-            ✅ Self-Recovery
-          </button>
-          <button
-            onClick={() => startStory('offline')}
-            className={`px-3 py-1.5 rounded text-xs font-semibold border transition-all ${
-              activeStory === 'offline'
-                ? 'bg-cyan-700 text-white border-cyan-500 shadow-md'
-                : 'bg-slate-800 text-slate-300 border-slate-700 hover:bg-slate-700'
-            }`}
-          >
-            ⚫ Signal Loss
-          </button>
-          <button
-            onClick={() => startStory('compound')}
-            className={`px-3 py-1.5 rounded text-xs font-semibold border transition-all ${
-              activeStory === 'compound'
-                ? 'bg-rose-700 text-amber-200 border-amber-400 font-bold shadow-md'
-                : 'bg-rose-950/80 text-rose-300 border-rose-800 hover:bg-rose-900'
-            }`}
-          >
-            🚨 Fall + Gas Leak
-          </button>
-          <button
-            onClick={() => startStory('fault')}
-            className={`px-3 py-1.5 rounded text-xs font-semibold border transition-all ${
-              activeStory === 'fault'
-                ? 'bg-amber-600 text-slate-950 border-amber-400 font-bold shadow-md'
-                : 'bg-amber-950/60 text-amber-300 border-amber-800 hover:bg-amber-900'
-            }`}
-          >
-            ⚠️ Sensor Fault
+            <Zap className="w-3.5 h-3.5" />
+            {chaosMode ? 'CHAOS INJECTION: ON' : 'CHAOS INJECTION: OFF'}
           </button>
         </div>
       </div>
 
-      {/* Visual Animation Stage: Surface vs Underground */}
+      {/* Preset Selector Buttons */}
+      <div className="flex items-center gap-2 flex-wrap">
+        <button
+          onClick={() => startStory('compound')}
+          className={`px-3 py-1.5 rounded text-xs font-semibold border transition-all ${
+            activeStory === 'compound'
+              ? 'bg-rose-700 text-amber-200 border-amber-400 font-bold shadow-md'
+              : 'bg-rose-950/80 text-rose-300 border-rose-800 hover:bg-rose-900'
+          }`}
+        >
+          🚨 Compound (Gas + Fall)
+        </button>
+        <button
+          onClick={() => startStory('fall')}
+          className={`px-3 py-1.5 rounded text-xs font-semibold border transition-all ${
+            activeStory === 'fall'
+              ? 'bg-rose-600 text-white border-rose-500 shadow-md'
+              : 'bg-slate-800 text-slate-300 border-slate-700 hover:bg-slate-700'
+          }`}
+        >
+          🚨 Fall & Man-Down
+        </button>
+        <button
+          onClick={() => startStory('gas')}
+          className={`px-3 py-1.5 rounded text-xs font-semibold border transition-all ${
+            activeStory === 'gas'
+              ? 'bg-rose-600 text-white border-rose-500 shadow-md'
+              : 'bg-slate-800 text-slate-300 border-slate-700 hover:bg-slate-700'
+          }`}
+        >
+          🔥 Toxic Gas Leak
+        </button>
+        <button
+          onClick={() => startStory('fade')}
+          className={`px-3 py-1.5 rounded text-xs font-semibold border transition-all ${
+            activeStory === 'fade'
+              ? 'bg-cyan-700 text-white border-cyan-500 shadow-md'
+              : 'bg-slate-800 text-slate-300 border-slate-700 hover:bg-slate-700'
+          }`}
+        >
+          ⚫ Radio Carrier Fade
+        </button>
+        <button
+          onClick={() => startStory('burst')}
+          className={`px-3 py-1.5 rounded text-xs font-semibold border transition-all ${
+            activeStory === 'burst'
+              ? 'bg-purple-700 text-white border-purple-500 shadow-md'
+              : 'bg-slate-800 text-slate-300 border-slate-700 hover:bg-slate-700'
+          }`}
+        >
+          ⚡ Multi-Worker Burst
+        </button>
+        <button
+          onClick={() => startStory('fault')}
+          className={`px-3 py-1.5 rounded text-xs font-semibold border transition-all ${
+            activeStory === 'fault'
+              ? 'bg-amber-600 text-slate-950 border-amber-400 font-bold shadow-md'
+              : 'bg-amber-950/60 text-amber-300 border-amber-800 hover:bg-amber-900'
+          }`}
+        >
+          ⚠️ Sensor Fault
+        </button>
+      </div>
+
+      {/* Visual Animation Stage */}
       <div className="bg-[#080d16] border border-slate-800 rounded-xl p-4 sm:p-6 overflow-hidden relative">
-        {/* Sky / Surface Area */}
         <div className="relative pb-6 border-b-2 border-dashed border-amber-600/40">
           <div className="flex items-center justify-between text-xs font-mono text-slate-400 mb-2">
             <span className="font-bold text-amber-400 uppercase tracking-wider">
-              SURFACE LEVEL (GROUND) — NO CELLULAR / INTERNET NEEDED
+              SURFACE LEVEL (GROUND) — NO CELLULAR / INTERNET REQUIRED
             </span>
             <span>BASE STATION RECEIVER</span>
           </div>
 
           <div className="flex items-center justify-between">
-            {/* Surface Base Station Antenna & Laptop */}
             <div className="flex items-center gap-3 p-3 bg-slate-900/90 rounded-lg border border-slate-700 max-w-sm">
               <div className="w-10 h-10 rounded-lg bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400">
                 <Radio className="w-5 h-5 animate-pulse" />
@@ -373,17 +364,18 @@ export const InteractiveSimulator: React.FC = () => {
               </div>
             </div>
 
-            {/* Operator Emergency Bell status */}
             <div className="text-right font-mono text-xs hidden sm:block">
               <span className="text-slate-500 block text-[10px]">OPERATOR ALARM</span>
               <span
                 className={`font-bold ${
-                  worker.state === 'MAN_DOWN' || worker.state === 'GAS_HAZARD'
+                  worker.state === 'MAN_DOWN' || worker.state === 'GAS_HAZARD' || worker.state === 'COMPOUND_HAZARD'
                     ? 'text-rose-400 animate-pulse text-sm'
                     : 'text-emerald-400'
                 }`}
               >
-                {worker.state === 'MAN_DOWN'
+                {worker.state === 'COMPOUND_HAZARD'
+                  ? '🚨 DUAL KLAXON ACTIVE'
+                  : worker.state === 'MAN_DOWN'
                   ? '🚨 SIREN SOUNDING'
                   : worker.state === 'GAS_HAZARD'
                   ? '🔥 GAS ALARM ACTIVE'
@@ -392,12 +384,11 @@ export const InteractiveSimulator: React.FC = () => {
             </div>
           </div>
 
-          {/* Radio Waves Animation in Mid-Air */}
           <div className="my-3 flex items-center justify-center">
             <div className="flex items-center gap-1.5 font-mono text-[11px] px-3 py-1 rounded-full bg-slate-900 border border-slate-800 text-cyan-300">
               <span className="w-2 h-2 rounded-full bg-cyan-400 animate-ping" />
               <span>
-                Wireless 433 MHz LoRa Radio Carrier (Punches through 10ft Concrete & Earth)
+                Wireless 433 MHz LoRa Radio Carrier (Subterranean Wave Propagation)
               </span>
             </div>
           </div>
@@ -407,28 +398,23 @@ export const InteractiveSimulator: React.FC = () => {
         <div className="pt-6">
           <div className="flex items-center justify-between text-xs font-mono text-slate-400 mb-3">
             <span className="font-bold text-slate-400 uppercase tracking-wider">
-              UNDERGROUND CONFINED SPACE (SEWER / MINE / SUB-LEVEL 4B)
+              UNDERGROUND CONFINED SPACE (SEWER / SUB-LEVEL 4B)
             </span>
-            <span className="text-rose-400">NO 4G/5G COVERAGE</span>
+            <span className="text-rose-400">NO CELLULAR SIGNALS</span>
           </div>
 
-          {/* Worker Node Graphic */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-            {/* Worker Visual Avatar & Status */}
             <div
               className={`p-4 rounded-xl border flex items-center gap-3 transition-all ${
-                worker.state === 'MAN_DOWN'
-                  ? 'bg-rose-950/60 border-rose-500 shadow-lg shadow-rose-950/50'
-                  : worker.state === 'GAS_HAZARD'
+                worker.state === 'COMPOUND_HAZARD' || worker.state === 'MAN_DOWN' || worker.state === 'GAS_HAZARD'
                   ? 'bg-rose-950/60 border-rose-500 shadow-lg shadow-rose-950/50'
                   : worker.state === 'POSSIBLE_FALL'
                   ? 'bg-amber-950/60 border-amber-500'
                   : 'bg-slate-900/90 border-slate-700'
               }`}
             >
-              {/* Worker Avatar */}
               <div className="text-3xl sm:text-4xl">
-                {worker.state === 'MAN_DOWN' ? '🤕' : worker.state === 'GAS_HAZARD' ? '😷' : worker.state === 'POSSIBLE_FALL' ? '⚠️' : '👷‍♂️'}
+                {worker.state === 'COMPOUND_HAZARD' ? '🚨' : worker.state === 'MAN_DOWN' ? '🤕' : worker.state === 'GAS_HAZARD' ? '😷' : worker.state === 'POSSIBLE_FALL' ? '⚠️' : '👷‍♂️'}
               </div>
               <div>
                 <div className="font-bold text-white text-sm">
@@ -438,7 +424,7 @@ export const InteractiveSimulator: React.FC = () => {
                   State:{' '}
                   <strong
                     className={
-                      worker.state === 'MAN_DOWN' || worker.state === 'GAS_HAZARD'
+                      worker.state === 'COMPOUND_HAZARD' || worker.state === 'MAN_DOWN' || worker.state === 'GAS_HAZARD'
                         ? 'text-rose-400'
                         : worker.state === 'POSSIBLE_FALL'
                         ? 'text-amber-400'
@@ -454,10 +440,9 @@ export const InteractiveSimulator: React.FC = () => {
               </div>
             </div>
 
-            {/* Wearable Sensors Telemetry (MQ-2 & MPU6050) */}
             <div className="p-4 rounded-xl bg-slate-900/90 border border-slate-700 flex flex-col justify-between font-mono text-xs">
               <span className="text-slate-400 font-bold block mb-1">
-                WEARABLE SENSORS (HARDWARE)
+                WEARABLE TELEMETRY
               </span>
               <div className="space-y-1.5 text-[11px]">
                 <div className="flex justify-between items-center">
@@ -473,36 +458,37 @@ export const InteractiveSimulator: React.FC = () => {
                   </strong>
                 </div>
                 <div className="flex justify-between items-center">
-                  <span className="text-slate-400">Battery:</span>
-                  <strong className="text-slate-200">3.82 V (Lithium)</strong>
+                  <span className="text-slate-400">RF Carrier RSSI:</span>
+                  <strong className="text-slate-200">{worker.rssi} dBm</strong>
                 </div>
               </div>
             </div>
 
-            {/* Autonomous Local Arduino Decision */}
             <div className="p-4 rounded-xl bg-slate-900/90 border border-slate-700 flex flex-col justify-between font-mono text-xs">
               <span className="text-slate-400 font-bold block mb-1">
-                AUTONOMOUS ARDUINO BRAIN
+                LOCAL ARDUINO DECISION
               </span>
               <p className="text-[11px] text-slate-300 leading-snug font-sans">
-                {worker.state === 'MAN_DOWN'
+                {worker.state === 'COMPOUND_HAZARD'
+                  ? '🚨 Critical Compound State! Toxic gas + sustained immobility verified. Maximum siren cadence triggered.'
+                  : worker.state === 'MAN_DOWN'
                   ? '🚨 Fall detected + 10s immobility timeout reached. Autonomous emergency decision confirmed!'
                   : worker.state === 'GAS_HAZARD'
                   ? '🔥 Gas reading passed safety threshold. Local buzzer activated!'
                   : worker.state === 'POSSIBLE_FALL'
                   ? '⚠️ High G impact registered. Immobility timer active...'
-                  : '✅ All parameters normal. Transmitting 1Hz heartbeat packet.'}
+                  : '✅ All parameters normal. Transmitting heartbeat telemetry.'}
               </p>
               <div className="text-[10px] text-slate-500 mt-2">
-                *Decision executed on Arduino Uno. No cloud required.
+                *Local decision loop. Zero cloud dependencies.
               </div>
             </div>
           </div>
         </div>
       </div>
 
-      {/* Step-by-Step Story Explainer Bar */}
-      {activeStoryData && currentStepData ? (
+      {/* Step-by-Step Story Explainer */}
+      {activeStoryData && currentStepData && (
         <div className="p-4 bg-slate-900 rounded-xl border border-amber-500/40 space-y-3">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-800 pb-2">
             <div className="flex items-center gap-2">
@@ -514,7 +500,6 @@ export const InteractiveSimulator: React.FC = () => {
               </span>
             </div>
 
-            {/* Stepper controls */}
             <div className="flex items-center gap-2">
               <button
                 onClick={goToPrevStep}
@@ -544,8 +529,7 @@ export const InteractiveSimulator: React.FC = () => {
             {currentStepData.description}
           </p>
 
-          {/* Quick operator action when in alert */}
-          {(worker.state === 'MAN_DOWN' || worker.state === 'GAS_HAZARD') && (
+          {(worker.state === 'MAN_DOWN' || worker.state === 'GAS_HAZARD' || worker.state === 'COMPOUND_HAZARD') && (
             <div className="pt-2 flex items-center gap-3">
               <span className="text-xs text-amber-300 font-medium">
                 Try Operator Action:
@@ -554,20 +538,16 @@ export const InteractiveSimulator: React.FC = () => {
                 onClick={() => acknowledgeAlert(worker.id)}
                 className="px-3 py-1 rounded bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs"
               >
-                Click to Acknowledge Alert
+                Acknowledge Alert
               </button>
               <button
                 onClick={() => requestResetWorker(worker.id)}
                 className="px-3 py-1 rounded bg-rose-950 hover:bg-rose-900 text-rose-300 border border-rose-800 text-xs"
               >
-                Test Reset Override
+                Reset Override
               </button>
             </div>
           )}
-        </div>
-      ) : (
-        <div className="p-4 bg-slate-900/60 rounded-xl border border-slate-800 text-center text-xs text-slate-400 font-mono">
-          Click any scenario above (e.g., <strong>🚨 Fall & Man-Down</strong> or <strong>🔥 Toxic Gas Leak</strong>) to start the step-by-step interactive walkthrough.
         </div>
       )}
     </div>

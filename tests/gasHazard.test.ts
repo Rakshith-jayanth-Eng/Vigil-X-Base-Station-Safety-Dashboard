@@ -30,6 +30,7 @@ function createMockWorker(overrides: Partial<WorkerNode> = {}): WorkerNode {
     packetCount: 1,
     lastPacketTime: Date.now(),
     lastPacketFormatted: '12:00:00',
+    telemetryHistory: [],
     isAcknowledged: false,
     ...overrides,
   };
@@ -141,19 +142,16 @@ describe('Gas-Hazard Logic and MQ-2 Evaluation (Section 5 Audit)', () => {
     };
     const res2 = processPacketAgainstWorker(res1.updatedWorker, packet2, 2000, '12:00:02');
     assert.equal(res2.updatedWorker.gasState, 'HAZARD');
-    // Should NOT trigger new duplicate alarm or duplicate initial event
     assert.equal(res2.newEvents.filter((e) => e.eventType === 'GAS_HAZARD').length, 0);
   });
 
   it('11. Interaction between gas hazard and existing MAN DOWN event (Compound Hazard)', () => {
-    // Worker already in MAN_DOWN
     const manDownWorker = createMockWorker({
       state: 'MAN_DOWN',
       manDownStep: 'MAN_DOWN',
       motionState: 'IMMOBILE',
     });
 
-    // Incoming gas hazard packet
     const gasPacket: RawPacket = {
       workerId: 'WORKER_01',
       event: 'GAS_HAZARD',
@@ -162,7 +160,6 @@ describe('Gas-Hazard Logic and MQ-2 Evaluation (Section 5 Audit)', () => {
     };
 
     const res = processPacketAgainstWorker(manDownWorker, gasPacket, 3000, '12:00:03');
-    // State must reflect the dual critical compound hazard!
     assert.equal(res.updatedWorker.state, 'COMPOUND_HAZARD');
     assert.equal(res.updatedWorker.gasState, 'HAZARD');
     assert.equal(res.shouldTriggerAlarm, true);
@@ -179,12 +176,30 @@ describe('Gas-Hazard Logic and MQ-2 Evaluation (Section 5 Audit)', () => {
     const safePacket: RawPacket = {
       workerId: 'WORKER_01',
       event: 'NORMAL',
-      gas: 310, // Well below 485
+      gas: 310,
     };
 
     const res = processPacketAgainstWorker(hazardWorker, safePacket, 4000, '12:00:04');
     assert.equal(res.updatedWorker.gasState, 'SAFE');
     assert.equal(res.updatedWorker.state, 'NORMAL');
     assert.ok(res.newEvents.some((e) => e.eventType === 'RECOVERY'));
+  });
+
+  it('13. Maintains rolling telemetry history and tracks peak gas and TWA', () => {
+    let worker = createMockWorker();
+    const gasReadings = [300, 320, 650, 700, 400];
+
+    for (let i = 0; i < gasReadings.length; i++) {
+      const res = processPacketAgainstWorker(worker, {
+        workerId: 'WORKER_01',
+        event: gasReadings[i] >= 500 ? 'GAS_HAZARD' : 'NORMAL',
+        gas: gasReadings[i],
+      }, 5000 + i * 1000, `12:00:0${5 + i}`);
+      worker = res.updatedWorker;
+    }
+
+    assert.equal(worker.telemetryHistory.length, 5);
+    assert.equal(worker.peakGasValue, 700);
+    assert.ok(worker.twaGasValue !== undefined && worker.twaGasValue > 0);
   });
 });

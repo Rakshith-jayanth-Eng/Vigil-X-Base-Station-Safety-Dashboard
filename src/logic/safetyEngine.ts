@@ -1,10 +1,21 @@
-import { WorkerNode, RawPacket, SafetyEvent, WorkerState, MotionState, ManDownStep, AccelData, GyroData } from '../types';
+import {
+  WorkerNode,
+  RawPacket,
+  SafetyEvent,
+  WorkerState,
+  MotionState,
+  ManDownStep,
+  AccelData,
+  GyroData,
+  TelemetryPoint,
+} from '../types';
 
 export const DEFAULT_GAS_THRESHOLD = 500;
 export const DEFAULT_GAS_HYSTERESIS = 15; // 15 ADC units deadband to prevent fluctuation flapping
 export const MIN_VALID_ADC = 0;
 export const MAX_VALID_ADC = 1023;
 export const DEFAULT_IMMOBILITY_TIMEOUT = 10; // seconds
+export const MAX_TELEMETRY_HISTORY = 60; // 60 rolling samples for sparklines and TWA
 
 export interface GasEvaluationResult {
   gasState: 'SAFE' | 'HAZARD';
@@ -115,7 +126,10 @@ export function processPacketAgainstWorker(
   nowMs: number = Date.now(),
   timeStr: string = new Date(nowMs).toTimeString().slice(0, 8)
 ): EngineResult {
-  const updated: WorkerNode = { ...worker };
+  const updated: WorkerNode = {
+    ...worker,
+    telemetryHistory: worker.telemetryHistory ? [...worker.telemetryHistory] : [],
+  };
   const newEvents: SafetyEvent[] = [];
   let shouldTriggerAlarm = false;
   let alarmType: 'CRITICAL' | 'WARNING' | 'RECOVERY' | null = null;
@@ -154,6 +168,10 @@ export function processPacketAgainstWorker(
   updated.gasValue = packet.gas;
   updated.gasState = gasEval.gasState;
   updated.gasSensorFault = gasEval.gasSensorFault;
+
+  if (Number.isFinite(packet.gas)) {
+    updated.peakGasValue = Math.max(updated.peakGasValue ?? 0, packet.gas);
+  }
 
   if (gasEval.gasSensorFault) {
     newEvents.push({
@@ -276,7 +294,7 @@ export function processPacketAgainstWorker(
   }
 
   // 4. Compound Emergency Synthesis
-  // If BOTH Gas Hazard AND Man Down are active -> COMPOUND_HAZARD (most critical condition)
+  // If BOTH Gas Hazard AND Man Down are active -> COMPOUND_HAZARD (highest priority)
   if (updated.gasState === 'HAZARD' && (isManDown || updated.manDownStep === 'MAN_DOWN')) {
     updated.state = 'COMPOUND_HAZARD';
     if (prevState !== 'COMPOUND_HAZARD') {
@@ -306,6 +324,28 @@ export function processPacketAgainstWorker(
     updated.manDownStep = 'ABNORMAL_MOTION';
   } else {
     updated.state = 'NORMAL';
+  }
+
+  // 5. Append Telemetry History Point (bounded rolling window of 60 points)
+  const motionMag = Number(vectorMagnitude(updated.accel).toFixed(3));
+  const newPoint: TelemetryPoint = {
+    timestamp: timeStr,
+    timeMs: nowMs,
+    gasValue: Number.isFinite(packet.gas) ? packet.gas : 0,
+    motionMag,
+    batteryMv: updated.batteryMv,
+    rssi: updated.rssi,
+    state: updated.state,
+  };
+
+  const nextHistory = [...updated.telemetryHistory, newPoint].slice(-MAX_TELEMETRY_HISTORY);
+  updated.telemetryHistory = nextHistory;
+
+  // Calculate Time-Weighted Average (TWA) gas value over history
+  const validGasPoints = nextHistory.filter((p) => p.gasValue > 0);
+  if (validGasPoints.length > 0) {
+    const sum = validGasPoints.reduce((acc, p) => acc + p.gasValue, 0);
+    updated.twaGasValue = Math.round(sum / validGasPoints.length);
   }
 
   return {

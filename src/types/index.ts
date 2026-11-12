@@ -43,6 +43,16 @@ export interface WorkerGps {
   accuracyMeters: number;
 }
 
+export interface TelemetryPoint {
+  timestamp: string;
+  timeMs: number;
+  gasValue: number;
+  motionMag: number;
+  batteryMv?: number | null;
+  rssi: number;
+  state: WorkerState;
+}
+
 export interface WorkerNode {
   id: string; // e.g. "WORKER_01"
   displayName: string; // e.g. "Worker 01"
@@ -55,6 +65,8 @@ export interface WorkerNode {
   gasState: 'SAFE' | 'HAZARD';
   gasHazardTimestamp?: string;
   gasSensorFault?: boolean; // Flagged if ADC reading is invalid/out-of-range
+  peakGasValue?: number;
+  twaGasValue?: number; // 60-sample short-term time weighted average
 
   // IMU telemetry
   motionState: MotionState;
@@ -79,10 +91,14 @@ export interface WorkerNode {
   // Optional GPS
   gps?: WorkerGps;
 
-  // Operator acknowledgement
+  // Bounded rolling telemetry buffer (last 60 samples for trend sparklines & rate-of-change)
+  telemetryHistory: TelemetryPoint[];
+
+  // Operator acknowledgement & alarm snooze
   isAcknowledged: boolean;
   acknowledgedAt?: string;
   acknowledgedBy?: string;
+  snoozeUntil?: number; // epoch ms if operator snoozed alarm
 }
 
 export interface SafetyEvent {
@@ -91,12 +107,25 @@ export interface SafetyEvent {
   timeMs: number;
   workerId: string;
   workerName: string;
-  eventType: 'NORMAL' | 'POSSIBLE_FALL' | 'MAN_DOWN' | 'GAS_HAZARD' | 'COMPOUND_HAZARD' | 'OFFLINE' | 'RECOVERY' | 'ACKNOWLEDGED' | 'RESET' | 'CONNECTION' | 'SENSOR_FAULT';
+  eventType:
+    | 'NORMAL'
+    | 'POSSIBLE_FALL'
+    | 'MAN_DOWN'
+    | 'GAS_HAZARD'
+    | 'COMPOUND_HAZARD'
+    | 'OFFLINE'
+    | 'RECOVERY'
+    | 'ACKNOWLEDGED'
+    | 'SNOOZED'
+    | 'RESET'
+    | 'CONNECTION'
+    | 'SENSOR_FAULT';
   severity: EventSeverity;
   description: string;
   gasValue?: number;
   rssi?: number;
   category: 'critical' | 'warning' | 'gas' | 'man-down' | 'compound' | 'connection' | 'system';
+  operatorNote?: string;
 }
 
 export interface BaseStationStatus {
@@ -110,7 +139,9 @@ export interface BaseStationStatus {
   totalPacketsReceived: number;
   uptimeSeconds: number;
   audioAlarmEnabled: boolean;
-  offlineTimeoutSeconds: number; // default 25s
+  offlineTimeoutSeconds: number; // default 30s
+  alarmSnoozeSeconds: number; // default 60s
+  activeAlarmSnoozedUntil: number | null;
 }
 
 export interface RawPacket {
@@ -127,4 +158,22 @@ export interface RawPacket {
   lat?: number;
   lng?: number;
   sensorFault?: boolean;
+}
+
+export interface IncidentReportBundle {
+  generatedAt: string;
+  stationId: string;
+  mode: 'DEMO' | 'LIVE';
+  summary: {
+    totalWorkers: number;
+    activeEmergencies: number;
+    totalPackets: number;
+    uptimeSeconds: number;
+  };
+  workers: WorkerNode[];
+  events: SafetyEvent[];
+  chemicalAdvisorySummary?: {
+    gasProfilesLoaded: string[];
+    dispatchedTimestamp: string;
+  };
 }

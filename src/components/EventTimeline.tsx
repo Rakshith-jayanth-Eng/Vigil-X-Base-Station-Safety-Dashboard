@@ -1,10 +1,8 @@
 import React, { useState } from 'react';
 import { useSafetySystem } from '../context/SafetySystemContext';
-import { SafetyEvent } from '../types';
 import {
   Download,
   Trash2,
-  Filter,
   Search,
   AlertTriangle,
   ShieldAlert,
@@ -12,15 +10,16 @@ import {
   Radio,
   CheckCircle2,
   Info,
+  FileSpreadsheet,
+  FileCode,
 } from 'lucide-react';
 
 export const EventTimeline: React.FC = () => {
-  const { events, clearEvents, exportEvents } = useSafetySystem();
+  const { events, clearEvents, exportAuditBundle } = useSafetySystem();
   const [activeFilter, setActiveFilter] = useState<string>('all');
   const [searchTerm, setSearchTerm] = useState<string>('');
 
   const filteredEvents = events.filter((e) => {
-    // Category filter
     if (activeFilter === 'critical' && e.severity !== 'CRITICAL') return false;
     if (activeFilter === 'warning' && e.severity !== 'WARNING') return false;
     if (activeFilter === 'gas' && e.category !== 'gas') return false;
@@ -28,14 +27,14 @@ export const EventTimeline: React.FC = () => {
     if (activeFilter === 'connection' && e.category !== 'connection') return false;
     if (activeFilter === 'system' && e.category !== 'system') return false;
 
-    // Search term
     if (searchTerm.trim()) {
       const term = searchTerm.toLowerCase();
       const match =
         e.workerId.toLowerCase().includes(term) ||
         e.workerName.toLowerCase().includes(term) ||
         e.eventType.toLowerCase().includes(term) ||
-        e.description.toLowerCase().includes(term);
+        e.description.toLowerCase().includes(term) ||
+        (e.operatorNote && e.operatorNote.toLowerCase().includes(term));
       if (!match) return false;
     }
 
@@ -48,37 +47,37 @@ export const EventTimeline: React.FC = () => {
       <div className="p-4 bg-[#0a101d] border-b border-slate-800 flex flex-col md:flex-row md:items-center justify-between gap-3">
         <div>
           <h2 className="text-base font-mono font-bold text-white flex items-center gap-2">
-            <span>REAL-TIME SAFETY EVENT TIMELINE</span>
+            <span>SAFETY INCIDENT & TELEMETRY AUDIT TRAIL</span>
             <span className="text-xs font-normal text-slate-400">
               ({filteredEvents.length} events logged)
             </span>
           </h2>
           <p className="text-xs text-slate-400 font-mono mt-0.5">
-            Audit trail of worker states, hardware heartbeat, gas threshold crossings, and RF telemetry
+            Immutable log of worker states, operator acknowledgments, gas threshold crossings, and RF telemetry
           </p>
         </div>
 
-        {/* Action buttons: Export CSV/JSON & Clear */}
+        {/* 1-Click JSON and CSV Audit Bundle Export */}
         <div className="flex items-center gap-2 flex-wrap">
           <button
-            onClick={() => exportEvents('csv')}
-            title="Download CSV for incident reporting"
-            className="px-2.5 py-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-mono border border-slate-700 flex items-center gap-1 transition-colors"
+            onClick={() => exportAuditBundle('csv')}
+            title="Download comprehensive CSV compliance audit bundle"
+            className="px-2.5 py-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-mono border border-slate-700 flex items-center gap-1.5 transition-colors"
           >
-            <Download className="w-3.5 h-3.5" />
-            CSV
+            <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-400" />
+            CSV AUDIT BUNDLE
           </button>
           <button
-            onClick={() => exportEvents('json')}
-            title="Download JSON telemetry log"
-            className="px-2.5 py-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-mono border border-slate-700 flex items-center gap-1 transition-colors"
+            onClick={() => exportAuditBundle('json')}
+            title="Download structured JSON telemetry & incident bundle"
+            className="px-2.5 py-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-mono border border-slate-700 flex items-center gap-1.5 transition-colors"
           >
-            <Download className="w-3.5 h-3.5" />
-            JSON
+            <FileCode className="w-3.5 h-3.5 text-cyan-400" />
+            JSON BUNDLE
           </button>
           <button
             onClick={clearEvents}
-            title="Clear event logs"
+            title="Clear active event buffer"
             className="px-2.5 py-1.5 rounded bg-rose-950/40 hover:bg-rose-900/60 text-rose-300 text-xs font-mono border border-rose-800/50 flex items-center gap-1 transition-colors"
           >
             <Trash2 className="w-3.5 h-3.5" />
@@ -97,7 +96,7 @@ export const EventTimeline: React.FC = () => {
             { id: 'warning', label: 'WARNING' },
             { id: 'gas', label: 'GAS' },
             { id: 'man-down', label: 'MAN-DOWN' },
-            { id: 'connection', label: 'CONNECTION' },
+            { id: 'connection', label: 'RF LINK' },
             { id: 'system', label: 'SYSTEM' },
           ].map((f) => (
             <button
@@ -119,7 +118,7 @@ export const EventTimeline: React.FC = () => {
           <Search className="w-3.5 h-3.5 absolute left-2.5 top-2.5 text-slate-500" />
           <input
             type="text"
-            placeholder="Search worker or event..."
+            placeholder="Search worker or incident..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             className="w-full pl-8 pr-3 py-1 bg-slate-900 border border-slate-700/80 rounded text-xs font-mono text-slate-200 placeholder-slate-500 focus:outline-hidden focus:border-amber-500"
@@ -174,7 +173,7 @@ export const EventTimeline: React.FC = () => {
                   <div>
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="text-slate-400 font-semibold">{e.timestamp}</span>
-                      <span className="font-black text-white">{e.workerId}</span>
+                      <span className="font-bold text-white">{e.workerId}</span>
                       <span
                         className={`text-[10px] font-bold px-1.5 py-0.2 rounded border ${severityBadge}`}
                       >
@@ -194,6 +193,11 @@ export const EventTimeline: React.FC = () => {
                     <p className="text-slate-300 mt-1 leading-snug font-sans text-xs">
                       {e.description}
                     </p>
+                    {e.operatorNote && (
+                      <div className="mt-1 text-[11px] text-amber-300 bg-amber-950/40 border border-amber-800/40 px-2 py-0.5 rounded inline-block">
+                        Operator Log: {e.operatorNote}
+                      </div>
+                    )}
                   </div>
                 </div>
 

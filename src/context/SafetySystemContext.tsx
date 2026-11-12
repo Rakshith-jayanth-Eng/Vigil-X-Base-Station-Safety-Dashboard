@@ -1,13 +1,11 @@
-import React, { createContext, useContext, useState, useEffect, useRef, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
   WorkerNode,
-  WorkerState,
   SafetyEvent,
   BaseStationStatus,
   RawPacket,
-  MotionState,
-  ManDownStep,
-  EventSeverity,
+  IncidentReportBundle,
+  TelemetryPoint,
 } from '../types';
 import { alarmManager } from '../utils/audio';
 import { parsePacketLine } from '../utils/packetParser';
@@ -15,7 +13,10 @@ import {
   processPacketAgainstWorker,
   DEFAULT_GAS_THRESHOLD,
   DEFAULT_IMMOBILITY_TIMEOUT,
+  MAX_TELEMETRY_HISTORY,
 } from '../logic/safetyEngine';
+import { db, collection, doc, setDoc } from '../config/firebase';
+import { KNOWN_HAZARDOUS_GASES } from '../services/pubchemService';
 
 interface SafetyContextType {
   workers: WorkerNode[];
@@ -24,9 +25,12 @@ interface SafetyContextType {
   baseStation: BaseStationStatus;
   events: SafetyEvent[];
   criticalAlerts: { worker: WorkerNode; reason: string; eventType: string; time: string }[];
+  snoozeRemaining: number;
   
   // Actions
-  acknowledgeAlert: (workerId: string) => void;
+  acknowledgeAlert: (workerId: string, note?: string) => void;
+  snoozeActiveAlarm: (durationSeconds?: number) => void;
+  cancelAlarmSnooze: () => void;
   requestResetWorker: (workerId: string) => void;
   confirmResetWorker: (workerId: string) => void;
   cancelResetModal: () => void;
@@ -44,14 +48,27 @@ interface SafetyContextType {
   serialLogs: string[];
   injectRawPacket: (line: string) => { success: boolean; message: string };
   
-  // Simulation triggers
-  simulateScenario: (scenario: 'normal' | 'gas_hazard' | 'possible_fall' | 'man_down' | 'compound_hazard' | 'sensor_fault' | 'offline' | 'recovery', workerId?: string) => void;
+  // Simulation presets & triggers
+  simulateScenario: (
+    scenario:
+      | 'normal'
+      | 'gas_hazard'
+      | 'possible_fall'
+      | 'man_down'
+      | 'compound_hazard'
+      | 'sensor_fault'
+      | 'offline'
+      | 'recovery'
+      | 'radio_fade'
+      | 'burst_stress',
+    workerId?: string
+  ) => void;
   autoSimulate: boolean;
   toggleAutoSimulate: () => void;
   
-  // Event log controls
+  // Event log controls & Auditing
   clearEvents: () => void;
-  exportEvents: (format: 'json' | 'csv') => void;
+  exportAuditBundle: (format: 'json' | 'csv') => void;
   
   // Settings
   updateWorkerThreshold: (workerId: string, threshold: number) => void;
@@ -59,6 +76,26 @@ interface SafetyContextType {
 }
 
 const SafetyContext = createContext<SafetyContextType | null>(null);
+
+function generateInitialHistory(baseGas: number, rssi: number): TelemetryPoint[] {
+  const points: TelemetryPoint[] = [];
+  const now = Date.now();
+  for (let i = 15; i >= 0; i--) {
+    const timeMs = now - i * 3000;
+    const timeStr = new Date(timeMs).toTimeString().slice(0, 8);
+    const gasJitter = Math.floor(Math.sin(i) * 12) + (Math.random() > 0.5 ? 4 : -4);
+    points.push({
+      timestamp: timeStr,
+      timeMs,
+      gasValue: Math.max(100, baseGas + gasJitter),
+      motionMag: 1.0 + +(Math.random() * 0.15 - 0.05).toFixed(3),
+      batteryMv: 3820 - i * 2,
+      rssi: rssi + Math.floor(Math.random() * 6 - 3),
+      state: 'NORMAL',
+    });
+  }
+  return points;
+}
 
 const INITIAL_WORKERS: WorkerNode[] = [
   {
@@ -69,6 +106,8 @@ const INITIAL_WORKERS: WorkerNode[] = [
     gasValue: 318,
     gasThreshold: 500,
     gasState: 'SAFE',
+    peakGasValue: 340,
+    twaGasValue: 318,
     motionState: 'MOVING',
     accel: { x: -0.18, y: 0.94, z: 0.22 },
     gyro: { x: 12, y: -4, z: 8 },
@@ -81,10 +120,11 @@ const INITIAL_WORKERS: WorkerNode[] = [
     lastPacketTime: Date.now() - 3000,
     lastPacketFormatted: new Date(Date.now() - 3000).toTimeString().slice(0, 8),
     batteryMv: 3820,
+    telemetryHistory: generateInitialHistory(318, -82),
     gps: {
       lat: 37.7749,
       lng: -122.4194,
-      hasFix: false, // In underground environment
+      hasFix: false,
       satellites: 2,
       accuracyMeters: 45,
     },
@@ -98,6 +138,8 @@ const INITIAL_WORKERS: WorkerNode[] = [
     gasValue: 345,
     gasThreshold: 500,
     gasState: 'SAFE',
+    peakGasValue: 360,
+    twaGasValue: 345,
     motionState: 'MOVING',
     accel: { x: 0.05, y: 0.98, z: 0.12 },
     gyro: { x: -3, y: 6, z: 1 },
@@ -110,6 +152,7 @@ const INITIAL_WORKERS: WorkerNode[] = [
     lastPacketTime: Date.now() - 7000,
     lastPacketFormatted: new Date(Date.now() - 7000).toTimeString().slice(0, 8),
     batteryMv: 3740,
+    telemetryHistory: generateInitialHistory(345, -89),
     gps: {
       lat: 37.7752,
       lng: -122.4188,
@@ -127,6 +170,8 @@ const INITIAL_WORKERS: WorkerNode[] = [
     gasValue: 290,
     gasThreshold: 500,
     gasState: 'SAFE',
+    peakGasValue: 305,
+    twaGasValue: 290,
     motionState: 'STATIONARY',
     accel: { x: 0.01, y: 0.99, z: 0.03 },
     gyro: { x: 0, y: 1, z: -1 },
@@ -139,6 +184,7 @@ const INITIAL_WORKERS: WorkerNode[] = [
     lastPacketTime: Date.now() - 11000,
     lastPacketFormatted: new Date(Date.now() - 11000).toTimeString().slice(0, 8),
     batteryMv: 3680,
+    telemetryHistory: generateInitialHistory(290, -94),
     gps: {
       lat: 37.7745,
       lng: -122.4202,
@@ -196,10 +242,12 @@ export const SafetySystemProvider: React.FC<{ children: React.ReactNode }> = ({ 
   const [events, setEvents] = useState<SafetyEvent[]>(INITIAL_EVENTS);
   const [pendingResetWorkerId, setPendingResetWorkerId] = useState<string | null>(null);
   const [autoSimulate, setAutoSimulate] = useState<boolean>(true);
+  const [snoozeRemaining, setSnoozeRemaining] = useState<number>(0);
   const [serialLogs, setSerialLogs] = useState<string[]>([
-    '[BOOT] Vigil-X Base Station Engine Ready',
+    '[BOOT] Vigil-X Base Station Engine v2.0 Ready',
     '[LORA] SX1278 SPI interface active (NSS=10, DIO0=2, RST=9)',
     '[SERIAL] Bridge listening at 115200 baud',
+    '[SYNC] Local-first audit persistence online',
   ]);
 
   const [baseStation, setBaseStation] = useState<BaseStationStatus>({
@@ -213,27 +261,68 @@ export const SafetySystemProvider: React.FC<{ children: React.ReactNode }> = ({ 
     totalPacketsReceived: 395,
     uptimeSeconds: 4320,
     audioAlarmEnabled: true,
-    offlineTimeoutSeconds: 30, // mark worker offline after 30s without packet
+    offlineTimeoutSeconds: 30,
+    alarmSnoozeSeconds: 60,
+    activeAlarmSnoozedUntil: null,
   });
 
-  // Reference for Web Serial port and reader
   const serialPortRef = useRef<any>(null);
   const serialReaderRef = useRef<any>(null);
   const isReadingSerialRef = useRef<boolean>(false);
 
-  // Helper to add safety events
-  const addEvent = useCallback((event: Omit<SafetyEvent, 'id' | 'timeMs'>) => {
-    const newEvt: SafetyEvent = {
-      ...event,
-      id: `evt-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
-      timeMs: Date.now(),
-    };
-    setEvents((prev) => [newEvt, ...prev].slice(0, 500)); // Keep last 500 events
+  // Sync to Firestore (asynchronous, non-blocking with local fallback)
+  const persistEventToFirestore = useCallback(async (evt: SafetyEvent) => {
+    try {
+      if (typeof window === 'undefined') return;
+      const alertCollection = collection(db, 'safety_alerts');
+      const docRef = doc(alertCollection, evt.id);
+      await setDoc(docRef, {
+        workerId: evt.workerId,
+        alertType: evt.eventType === 'GAS_HAZARD' || evt.eventType === 'MAN_DOWN' ? evt.eventType : 'NONE',
+        timestamp: evt.timeMs,
+        createdBy: 'system',
+        severity: evt.severity,
+        description: evt.description,
+        gasValue: evt.gasValue ?? null,
+      });
+    } catch {
+      // Offline mode or permissions fallback
+    }
   }, []);
 
-  // Append serial log line
+  // Helper to add safety events
+  const addEvent = useCallback(
+    (event: Omit<SafetyEvent, 'id' | 'timeMs'>) => {
+      const nowMs = Date.now();
+      const newEvt: SafetyEvent = {
+        ...event,
+        id: `evt-${nowMs}-${Math.random().toString(36).substring(2, 7)}`,
+        timeMs: nowMs,
+      };
+      setEvents((prev) => [newEvt, ...prev].slice(0, 500));
+
+      if (['CRITICAL', 'WARNING'].includes(event.severity) || event.eventType === 'ACKNOWLEDGED') {
+        persistEventToFirestore(newEvt);
+      }
+    },
+    [persistEventToFirestore]
+  );
+
   const logSerial = useCallback((msg: string) => {
     setSerialLogs((prev) => [msg, ...prev].slice(0, 200));
+  }, []);
+
+  // Track Snooze Countdown Clock
+  useEffect(() => {
+    const timer = setInterval(() => {
+      const remaining = alarmManager.getSnoozeRemainingSeconds();
+      setSnoozeRemaining(remaining);
+      setBaseStation((prev) => ({
+        ...prev,
+        activeAlarmSnoozedUntil: remaining > 0 ? Date.now() + remaining * 1000 : null,
+      }));
+    }, 500);
+    return () => clearInterval(timer);
   }, []);
 
   // System uptime clock
@@ -256,11 +345,10 @@ export const SafetySystemProvider: React.FC<{ children: React.ReactNode }> = ({ 
         prevWorkers.map((w) => {
           let updated = { ...w };
 
-          // 1. Man-down verification progression (when Arduino reports possible fall / stationary timer)
+          // 1. Man-down verification progression
           if (updated.state === 'POSSIBLE_FALL' && updated.manDownStep === 'IMMOBILITY_TIMER') {
             const nextSec = updated.immobilitySeconds + 0.5;
             if (nextSec >= updated.immobilityTimeout) {
-              // Timeout reached -> Arduino triggers MAN_DOWN
               updated = {
                 ...updated,
                 state: 'MAN_DOWN',
@@ -278,7 +366,7 @@ export const SafetySystemProvider: React.FC<{ children: React.ReactNode }> = ({ 
                 description: `CRITICAL: Fall verified. Worker immobile for ${updated.immobilityTimeout}s without recovery.`,
                 category: 'man-down',
               });
-              if (baseStation.audioAlarmEnabled) {
+              if (baseStation.audioAlarmEnabled && !alarmManager.isSnoozed()) {
                 alarmManager.startCriticalAlarm();
               }
             } else {
@@ -286,10 +374,9 @@ export const SafetySystemProvider: React.FC<{ children: React.ReactNode }> = ({ 
             }
           }
 
-          // 2. Offline check: if time since last packet exceeds timeout and not already offline
+          // 2. Offline check
           const timeSincePacketSec = (now - updated.lastPacketTime) / 1000;
           if (timeSincePacketSec > baseStation.offlineTimeoutSeconds && updated.state !== 'OFFLINE') {
-            // Note: Section 24: "Distinguish COMMUNICATION FAILURE from WORKER EMERGENCY"
             updated = {
               ...updated,
               state: 'OFFLINE',
@@ -303,6 +390,9 @@ export const SafetySystemProvider: React.FC<{ children: React.ReactNode }> = ({ 
               description: `Communication lost. No LoRa packet received for ${Math.round(timeSincePacketSec)}s.`,
               category: 'connection',
             });
+            if (baseStation.audioAlarmEnabled) {
+              alarmManager.playOfflineAlert();
+            }
           }
 
           return updated;
@@ -313,7 +403,7 @@ export const SafetySystemProvider: React.FC<{ children: React.ReactNode }> = ({ 
     return () => clearInterval(timer);
   }, [baseStation.offlineTimeoutSeconds, baseStation.audioAlarmEnabled, addEvent]);
 
-  // Handle incoming packet (from Demo or Live Serial)
+  // Handle incoming packet
   const processIncomingPacket = useCallback(
     (raw: RawPacket) => {
       const now = Date.now();
@@ -332,7 +422,6 @@ export const SafetySystemProvider: React.FC<{ children: React.ReactNode }> = ({ 
         if (existingIndex >= 0) {
           targetWorker = { ...prevWorkers[existingIndex] };
         } else {
-          // Dynamic new worker registration
           targetWorker = {
             id: raw.workerId,
             displayName: `Worker ${raw.workerId.replace('WORKER_', '')}`,
@@ -341,6 +430,8 @@ export const SafetySystemProvider: React.FC<{ children: React.ReactNode }> = ({ 
             gasValue: isNaN(raw.gas) ? 300 : raw.gas,
             gasThreshold: DEFAULT_GAS_THRESHOLD,
             gasState: 'SAFE',
+            peakGasValue: isNaN(raw.gas) ? 300 : raw.gas,
+            twaGasValue: isNaN(raw.gas) ? 300 : raw.gas,
             motionState: raw.imuState || 'MOVING',
             accel: raw.accel || { x: 0, y: 1, z: 0 },
             gyro: raw.gyro || { x: 0, y: 0, z: 0 },
@@ -352,6 +443,7 @@ export const SafetySystemProvider: React.FC<{ children: React.ReactNode }> = ({ 
             packetCount: 0,
             lastPacketTime: now,
             lastPacketFormatted: timeStr,
+            telemetryHistory: [],
             isAcknowledged: false,
           };
         }
@@ -364,13 +456,12 @@ export const SafetySystemProvider: React.FC<{ children: React.ReactNode }> = ({ 
         }
 
         if (shouldTriggerAlarm && baseStation.audioAlarmEnabled) {
-          if (alarmType === 'CRITICAL') {
+          if (alarmType === 'CRITICAL' && !alarmManager.isSnoozed()) {
             alarmManager.startCriticalAlarm();
-          } else if (alarmType === 'WARNING') {
+          } else if (alarmType === 'WARNING' && !alarmManager.isSnoozed()) {
             alarmManager.playWarningBeep();
           }
         } else if (alarmType === 'RECOVERY') {
-          // Stop audio alarm if no other workers are in emergency
           const othersInCritical = prevWorkers.some(
             (w) => w.id !== raw.workerId && ['MAN_DOWN', 'GAS_HAZARD', 'COMPOUND_HAZARD'].includes(w.state)
           );
@@ -391,26 +482,23 @@ export const SafetySystemProvider: React.FC<{ children: React.ReactNode }> = ({ 
     [baseStation.audioAlarmEnabled, addEvent]
   );
 
-  // Auto-simulation ticker for demo mode (generates subtle telemetry fluctuations)
+  // Auto-simulation ticker for demo mode
   useEffect(() => {
     if (!autoSimulate || baseStation.mode !== 'DEMO' || !baseStation.isOnline || !baseStation.loraLinkConnected) {
       return;
     }
 
     const interval = setInterval(() => {
-      // Pick random worker to send realistic heartbeat
       setWorkers((prev) => {
         if (prev.length === 0) return prev;
         const randomWorker = prev[Math.floor(Math.random() * prev.length)];
-        
-        // If worker is in emergency, do not randomly overwrite unless it's normal telemetry
+
         if (
           randomWorker.state === 'MAN_DOWN' ||
           randomWorker.state === 'GAS_HAZARD' ||
           randomWorker.state === 'POSSIBLE_FALL' ||
           randomWorker.state === 'COMPOUND_HAZARD'
         ) {
-          // Just update RF and small jitter
           const gasJitter = Math.floor(Math.random() * 8) - 4;
           const packet: RawPacket = {
             workerId: randomWorker.id,
@@ -433,7 +521,6 @@ export const SafetySystemProvider: React.FC<{ children: React.ReactNode }> = ({ 
           return prev;
         }
 
-        // Random normal packet
         const gasBase = 310 + Math.floor(Math.random() * 45);
         const moving = Math.random() > 0.3;
         const packet: RawPacket = {
@@ -469,7 +556,17 @@ export const SafetySystemProvider: React.FC<{ children: React.ReactNode }> = ({ 
   // Simulation scenarios
   const simulateScenario = useCallback(
     (
-      scenario: 'normal' | 'gas_hazard' | 'possible_fall' | 'man_down' | 'compound_hazard' | 'sensor_fault' | 'offline' | 'recovery',
+      scenario:
+        | 'normal'
+        | 'gas_hazard'
+        | 'possible_fall'
+        | 'man_down'
+        | 'compound_hazard'
+        | 'sensor_fault'
+        | 'offline'
+        | 'recovery'
+        | 'radio_fade'
+        | 'burst_stress',
       workerId = 'WORKER_01'
     ) => {
       const timeStr = new Date().toTimeString().slice(0, 8);
@@ -490,7 +587,7 @@ export const SafetySystemProvider: React.FC<{ children: React.ReactNode }> = ({ 
         processIncomingPacket({
           workerId,
           event: 'GAS_HAZARD',
-          gas: 742, // Exceeds 500 threshold
+          gas: 742,
           imuState: 'MOVING',
           accel: { x: -0.05, y: 0.98, z: 0.15 },
           gyro: { x: 4, y: 3, z: -1 },
@@ -504,7 +601,7 @@ export const SafetySystemProvider: React.FC<{ children: React.ReactNode }> = ({ 
           event: 'POSSIBLE_FALL',
           gas: 320,
           imuState: 'POSSIBLE_FALL',
-          accel: { x: 2.85, y: -0.42, z: 0.88 }, // Impact acceleration spike
+          accel: { x: 2.85, y: -0.42, z: 0.88 },
           gyro: { x: 85, y: -120, z: 45 },
           rssi: -84,
           snr: 7.9,
@@ -516,29 +613,68 @@ export const SafetySystemProvider: React.FC<{ children: React.ReactNode }> = ({ 
           event: 'MAN_DOWN',
           gas: 328,
           imuState: 'IMMOBILE',
-          accel: { x: 0.02, y: 0.08, z: 0.99 }, // Horizontal on ground
+          accel: { x: 0.02, y: 0.08, z: 0.99 },
           gyro: { x: 0, y: 0, z: 0 },
           rssi: -87,
           snr: 7.2,
         });
         logSerial(`[SIM] Injected confirmed MAN_DOWN alert for ${workerId}`);
       } else if (scenario === 'compound_hazard') {
+        // Compound hazard: toxic gas + fall/immobility + radio fade
         processIncomingPacket({
           workerId,
           event: 'COMPOUND_HAZARD',
-          gas: 760, // Toxic gas reading
+          gas: 795,
           imuState: 'IMMOBILE',
           accel: { x: 0.02, y: 0.05, z: 0.99 },
           gyro: { x: 0, y: 0, z: 0 },
-          rssi: -85,
-          snr: 7.5,
+          rssi: -108,
+          snr: 1.5,
         });
-        logSerial(`[SIM] Injected COMPOUND_HAZARD (Man-Down + Gas) for ${workerId}`);
+        logSerial(`[SIM] Injected COMPOUND_HAZARD (Gas Leak + Man Down + Radio Fade) for ${workerId}`);
+      } else if (scenario === 'radio_fade') {
+        setWorkers((prev) =>
+          prev.map((w) =>
+            w.id === workerId
+              ? {
+                  ...w,
+                  rssi: -115,
+                  snr: -4.2,
+                }
+              : w
+          )
+        );
+        addEvent({
+          timestamp: timeStr,
+          workerId,
+          workerName: `Worker ${workerId.replace('WORKER_', '')}`,
+          eventType: 'CONNECTION',
+          severity: 'WARNING',
+          description: `LoRa RF link degraded for ${workerId}: RSSI dropped to -115 dBm, SNR: -4.2 dB.`,
+          rssi: -115,
+          category: 'connection',
+        });
+        logSerial(`[SIM] Simulated RF carrier fade for ${workerId} (-115 dBm)`);
+      } else if (scenario === 'burst_stress') {
+        // High-density multi-worker burst
+        ['WORKER_01', 'WORKER_02', 'WORKER_03'].forEach((id, idx) => {
+          setTimeout(() => {
+            processIncomingPacket({
+              workerId: id,
+              event: 'NORMAL',
+              gas: 300 + idx * 25,
+              imuState: 'MOVING',
+              accel: { x: 0.1, y: 0.95, z: 0.2 },
+              rssi: -82 - idx * 4,
+            });
+          }, idx * 100);
+        });
+        logSerial('[SIM] Injected rapid multi-worker telemetry burst stress test');
       } else if (scenario === 'sensor_fault') {
         processIncomingPacket({
           workerId,
           event: 'SENSOR_FAULT',
-          gas: NaN, // Corrupted/disconnected sensor ADC
+          gas: NaN,
           imuState: 'MOVING',
           sensorFault: true,
           rssi: -85,
@@ -546,7 +682,6 @@ export const SafetySystemProvider: React.FC<{ children: React.ReactNode }> = ({ 
         });
         logSerial(`[SIM] Injected SENSOR_FAULT for ${workerId}`);
       } else if (scenario === 'offline') {
-        // Mark worker offline by rolling back last packet time
         setWorkers((prev) =>
           prev.map((w) =>
             w.id === workerId
@@ -585,15 +720,15 @@ export const SafetySystemProvider: React.FC<{ children: React.ReactNode }> = ({ 
     [processIncomingPacket, addEvent, logSerial]
   );
 
-  // Manual raw packet injection (supports pasting Arduino serial output)
+  // Manual raw packet injection
   const injectRawPacket = useCallback(
     (line: string) => {
       const res = parsePacketLine(line);
       logSerial(`[INPUT] ${line}`);
-      if (res.success && res.packet) {
-        processIncomingPacket(res.packet);
-        logSerial(`[PARSED] OK: Worker=${res.packet.workerId}, Event=${res.packet.event}, Gas=${res.packet.gas}`);
-        return { success: true, message: `Parsed packet from ${res.packet.workerId} (${res.packet.event})` };
+      if (res.ok && res.data) {
+        processIncomingPacket(res.data);
+        logSerial(`[PARSED] OK: Worker=${res.data.workerId}, Event=${res.data.event}, Gas=${res.data.gas}`);
+        return { success: true, message: `Parsed packet from ${res.data.workerId} (${res.data.event})` };
       } else {
         logSerial(`[ERROR] Failed to parse: ${res.error}`);
         return { success: false, message: res.error || 'Syntax error' };
@@ -602,9 +737,9 @@ export const SafetySystemProvider: React.FC<{ children: React.ReactNode }> = ({ 
     [processIncomingPacket, logSerial]
   );
 
-  // Alert acknowledgement (operator acknowledged, does NOT change worker hardware state)
+  // Operator acknowledgment
   const acknowledgeAlert = useCallback(
-    (workerId: string) => {
+    (workerId: string, note?: string) => {
       const timeStr = new Date().toTimeString().slice(0, 8);
       alarmManager.playAcknowledgeChime();
 
@@ -628,13 +763,40 @@ export const SafetySystemProvider: React.FC<{ children: React.ReactNode }> = ({ 
         workerName: target?.displayName || workerId,
         eventType: 'ACKNOWLEDGED',
         severity: 'INFO',
-        description: `Alert acknowledged by operator. Emergency state on node remains active until cleared or recovered.`,
+        description: `Alert acknowledged by operator.${note ? ` Note: "${note}"` : ''} Emergency status on node persists until physical clearance.`,
         category: 'system',
+        operatorNote: note,
       });
       logSerial(`[ACK] Alert acknowledged for ${workerId} by BASE_OPERATOR_1`);
     },
     [workers, addEvent, logSerial]
   );
+
+  // 60-Second Snooze
+  const snoozeActiveAlarm = useCallback(
+    (durationSeconds = 60) => {
+      alarmManager.snoozeAlarm(durationSeconds);
+      setSnoozeRemaining(durationSeconds);
+      const timeStr = new Date().toTimeString().slice(0, 8);
+      addEvent({
+        timestamp: timeStr,
+        workerId: 'BASE_STATION',
+        workerName: 'Base Station',
+        eventType: 'SNOOZED',
+        severity: 'INFO',
+        description: `Alarm audio snoozed for ${durationSeconds} seconds by operator. Auto-rearm active.`,
+        category: 'system',
+      });
+      logSerial(`[SNOOZE] Audio alarms muted for ${durationSeconds}s`);
+    },
+    [addEvent, logSerial]
+  );
+
+  const cancelAlarmSnooze = useCallback(() => {
+    alarmManager.cancelSnooze();
+    setSnoozeRemaining(0);
+    logSerial('[SNOOZE] Alarm snooze canceled by operator.');
+  }, [logSerial]);
 
   // Request reset modal
   const requestResetWorker = useCallback((workerId: string) => {
@@ -730,9 +892,8 @@ export const SafetySystemProvider: React.FC<{ children: React.ReactNode }> = ({ 
         category: 'connection',
       });
 
-      // Continuous reader stream
       const textDecoder = new TextDecoderStream();
-      const readableStreamClosed = port.readable.pipeTo(textDecoder.writable);
+      port.readable.pipeTo(textDecoder.writable).catch(() => {});
       const reader = textDecoder.readable.getReader();
       serialReaderRef.current = reader;
 
@@ -752,22 +913,24 @@ export const SafetySystemProvider: React.FC<{ children: React.ReactNode }> = ({ 
                 const cleaned = line.replace('\r', '').trim();
                 if (cleaned) {
                   const res = parsePacketLine(cleaned);
-                  if (res.success && res.packet) {
-                    processIncomingPacket(res.packet);
+                  if (res.ok && res.data) {
+                    processIncomingPacket(res.data);
                   }
                   logSerial(`[SERIAL RX] ${cleaned}`);
                 }
               }
             }
           }
-        } catch (err: any) {
-          logSerial(`[SERIAL ERR] Stream disconnected: ${err?.message || err}`);
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : String(err);
+          logSerial(`[SERIAL ERR] Stream disconnected: ${msg}`);
         } finally {
           reader.releaseLock();
         }
       })();
-    } catch (err: any) {
-      logSerial(`[SERIAL] Connection cancelled or failed: ${err?.message || err}`);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logSerial(`[SERIAL] Connection cancelled or failed: ${msg}`);
       setBaseStation((prev) => ({
         ...prev,
         serialConnected: false,
@@ -792,8 +955,9 @@ export const SafetySystemProvider: React.FC<{ children: React.ReactNode }> = ({ 
         serialPortName: null,
       }));
       logSerial('[SERIAL] Disconnected.');
-    } catch (err: any) {
-      logSerial(`[SERIAL] Disconnect error: ${err?.message || err}`);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logSerial(`[SERIAL] Disconnect error: ${msg}`);
     }
   }, [logSerial]);
 
@@ -830,29 +994,95 @@ export const SafetySystemProvider: React.FC<{ children: React.ReactNode }> = ({ 
     setEvents([]);
   }, []);
 
-  const exportEvents = useCallback(
+  // Comprehensive JSON and CSV audit bundle with chemical data
+  const exportAuditBundle = useCallback(
     (format: 'json' | 'csv') => {
+      const now = new Date();
+      const dateStr = now.toISOString().replace(/[:.]/g, '-');
       let content = '';
       let mimeType = 'text/plain';
-      let filename = `vigil-x-events-${Date.now()}`;
+      let filename = `vigil-x-audit-bundle-${dateStr}`;
+
+      const activeEmergencies = workers.filter((w) =>
+        ['MAN_DOWN', 'GAS_HAZARD', 'POSSIBLE_FALL', 'COMPOUND_HAZARD'].includes(w.state)
+      ).length;
+
+      const loadedChemicals = Object.keys(KNOWN_HAZARDOUS_GASES);
 
       if (format === 'json') {
-        content = JSON.stringify(events, null, 2);
+        const bundle: IncidentReportBundle = {
+          generatedAt: now.toISOString(),
+          stationId: 'VIGILX-BASE-ALPHA',
+          mode: baseStation.mode,
+          summary: {
+            totalWorkers: workers.length,
+            activeEmergencies,
+            totalPackets: baseStation.totalPacketsReceived,
+            uptimeSeconds: baseStation.uptimeSeconds,
+          },
+          workers,
+          events,
+          chemicalAdvisorySummary: {
+            gasProfilesLoaded: loadedChemicals,
+            dispatchedTimestamp: now.toISOString(),
+          },
+        };
+        content = JSON.stringify(bundle, null, 2);
         mimeType = 'application/json';
         filename += '.json';
       } else {
-        const headers = ['Timestamp', 'WorkerID', 'WorkerName', 'Event', 'Severity', 'GasRaw', 'RSSI', 'Description'];
-        const rows = events.map((e) => [
+        // CSV with metadata header + tabular events + worker status summary
+        const metaLines = [
+          '# VIGIL-X INCIDENT COMPLIANCE AUDIT REPORT',
+          `# GeneratedAt: ${now.toISOString()}`,
+          `# Station: VIGILX-BASE-ALPHA`,
+          `# Mode: ${baseStation.mode}`,
+          `# ActiveEmergencies: ${activeEmergencies}`,
+          `# MonitoredChemicals: "${loadedChemicals.join('; ')}"`,
+          '',
+          'SECTION: EVENT_LOG',
+          'Timestamp,TimeMs,WorkerID,WorkerName,EventType,Severity,Category,GasValue,RSSI,OperatorNote,Description',
+        ];
+
+        const eventRows = events.map((e) => [
           `"${e.timestamp}"`,
+          e.timeMs,
           `"${e.workerId}"`,
           `"${e.workerName}"`,
           `"${e.eventType}"`,
           `"${e.severity}"`,
+          `"${e.category}"`,
           e.gasValue ?? '',
           e.rssi ?? '',
+          `"${(e.operatorNote || '').replace(/"/g, '""')}"`,
           `"${e.description.replace(/"/g, '""')}"`,
         ]);
-        content = [headers.join(','), ...rows.map((r) => r.join(','))].join('\n');
+
+        const workerSummaryLines = [
+          '',
+          'SECTION: WORKER_STATUS_SUMMARY',
+          'WorkerID,DisplayName,Zone,State,GasADC,GasThreshold,GasState,PeakGas,TWAGas,MotionState,RSSI,SNR,BatteryMv,Acknowledged',
+          ...workers.map((w) =>
+            [
+              `"${w.id}"`,
+              `"${w.displayName}"`,
+              `"${w.assignedZone}"`,
+              `"${w.state}"`,
+              w.gasValue,
+              w.gasThreshold,
+              `"${w.gasState}"`,
+              w.peakGasValue ?? w.gasValue,
+              w.twaGasValue ?? w.gasValue,
+              `"${w.motionState}"`,
+              w.rssi,
+              w.snr,
+              w.batteryMv ?? '',
+              w.isAcknowledged ? 'YES' : 'NO',
+            ].join(',')
+          ),
+        ];
+
+        content = [...metaLines, ...eventRows.map((r) => r.join(',')), ...workerSummaryLines].join('\n');
         mimeType = 'text/csv';
         filename += '.csv';
       }
@@ -867,7 +1097,7 @@ export const SafetySystemProvider: React.FC<{ children: React.ReactNode }> = ({ 
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
     },
-    [events]
+    [workers, events, baseStation]
   );
 
   const updateWorkerThreshold = useCallback((workerId: string, threshold: number) => {
@@ -883,57 +1113,95 @@ export const SafetySystemProvider: React.FC<{ children: React.ReactNode }> = ({ 
   }, []);
 
   // Compute active critical alerts
-  const criticalAlerts = workers
-    .filter((w) => ['MAN_DOWN', 'GAS_HAZARD', 'POSSIBLE_FALL', 'COMPOUND_HAZARD'].includes(w.state))
-    .map((w) => {
-      let reason = 'Hazard detected';
-      if (w.state === 'COMPOUND_HAZARD') reason = `🚨 DUAL HAZARD: Worker UNCONSCIOUS (MAN DOWN) in TOXIC GAS environment (MQ-2 ADC: ${w.gasValue})!`;
-      else if (w.state === 'MAN_DOWN') reason = 'Fall detected + prolonged immobility';
-      else if (w.state === 'GAS_HAZARD') reason = `Gas sensor value (${w.gasValue}) exceeded threshold (${w.gasThreshold})`;
-      else if (w.state === 'POSSIBLE_FALL') reason = 'Abnormal impact motion detected · Monitoring immobility timer';
+  const criticalAlerts = useMemo(
+    () =>
+      workers
+        .filter((w) => ['MAN_DOWN', 'GAS_HAZARD', 'POSSIBLE_FALL', 'COMPOUND_HAZARD'].includes(w.state))
+        .map((w) => {
+          let reason = 'Hazard detected';
+          if (w.state === 'COMPOUND_HAZARD')
+            reason = `🚨 DUAL HAZARD: Worker UNCONSCIOUS (MAN DOWN) in TOXIC GAS environment (MQ-2 ADC: ${w.gasValue})!`;
+          else if (w.state === 'MAN_DOWN') reason = 'Fall verified · Prolonged immobility sustained';
+          else if (w.state === 'GAS_HAZARD')
+            reason = `Gas sensor reading (${w.gasValue}) exceeded threshold (${w.gasThreshold})`;
+          else if (w.state === 'POSSIBLE_FALL')
+            reason = 'Abnormal impact motion detected · Immobility timer active';
 
-      return {
-        worker: w,
-        reason,
-        eventType: w.state,
-        time: w.lastPacketFormatted,
-      };
-    });
-
-  return (
-    <SafetyContext.Provider
-      value={{
-        workers,
-        selectedWorkerId,
-        setSelectedWorkerId,
-        baseStation,
-        events,
-        criticalAlerts,
-        acknowledgeAlert,
-        requestResetWorker,
-        confirmResetWorker,
-        cancelResetModal,
-        pendingResetWorkerId,
-        setMode,
-        toggleBaseStationPower,
-        toggleLoraLink,
-        toggleAudioAlarm,
-        connectSerial,
-        disconnectSerial,
-        serialLogs,
-        injectRawPacket,
-        simulateScenario,
-        autoSimulate,
-        toggleAutoSimulate,
-        clearEvents,
-        exportEvents,
-        updateWorkerThreshold,
-        updateImmobilityTimeout,
-      }}
-    >
-      {children}
-    </SafetyContext.Provider>
+          return {
+            worker: w,
+            reason,
+            eventType: w.state,
+            time: w.lastPacketFormatted,
+          };
+        }),
+    [workers]
   );
+
+  const contextValue = useMemo<SafetyContextType>(
+    () => ({
+      workers,
+      selectedWorkerId,
+      setSelectedWorkerId,
+      baseStation,
+      events,
+      criticalAlerts,
+      snoozeRemaining,
+      acknowledgeAlert,
+      snoozeActiveAlarm,
+      cancelAlarmSnooze,
+      requestResetWorker,
+      confirmResetWorker,
+      cancelResetModal,
+      pendingResetWorkerId,
+      setMode,
+      toggleBaseStationPower,
+      toggleLoraLink,
+      toggleAudioAlarm,
+      connectSerial,
+      disconnectSerial,
+      serialLogs,
+      injectRawPacket,
+      simulateScenario,
+      autoSimulate,
+      toggleAutoSimulate,
+      clearEvents,
+      exportAuditBundle,
+      updateWorkerThreshold,
+      updateImmobilityTimeout,
+    }),
+    [
+      workers,
+      selectedWorkerId,
+      baseStation,
+      events,
+      criticalAlerts,
+      snoozeRemaining,
+      acknowledgeAlert,
+      snoozeActiveAlarm,
+      cancelAlarmSnooze,
+      requestResetWorker,
+      confirmResetWorker,
+      cancelResetModal,
+      pendingResetWorkerId,
+      setMode,
+      toggleBaseStationPower,
+      toggleLoraLink,
+      toggleAudioAlarm,
+      connectSerial,
+      disconnectSerial,
+      serialLogs,
+      injectRawPacket,
+      simulateScenario,
+      autoSimulate,
+      toggleAutoSimulate,
+      clearEvents,
+      exportAuditBundle,
+      updateWorkerThreshold,
+      updateImmobilityTimeout,
+    ]
+  );
+
+  return <SafetyContext.Provider value={contextValue}>{children}</SafetyContext.Provider>;
 };
 
 export const useSafetySystem = () => {

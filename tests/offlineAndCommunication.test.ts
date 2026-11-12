@@ -23,6 +23,7 @@ function createMockWorker(overrides: Partial<WorkerNode> = {}): WorkerNode {
     packetCount: 50,
     lastPacketTime: 100000,
     lastPacketFormatted: '12:00:00',
+    telemetryHistory: [],
     isAcknowledged: false,
     ...overrides,
   };
@@ -30,13 +31,11 @@ function createMockWorker(overrides: Partial<WorkerNode> = {}): WorkerNode {
 
 describe('Communication Link & Offline State Audit (Section 24)', () => {
   it('1. Offline status is distinct from emergency status', () => {
-    // When a worker node stops transmitting, its state becomes OFFLINE
     const offlineWorker = createMockWorker({
       state: 'OFFLINE',
     });
 
     assert.equal(offlineWorker.state, 'OFFLINE');
-    // It is NOT classified as MAN_DOWN or GAS_HAZARD
     assert.notEqual(offlineWorker.state, 'MAN_DOWN');
     assert.notEqual(offlineWorker.state, 'GAS_HAZARD');
   });
@@ -74,12 +73,28 @@ describe('Communication Link & Offline State Audit (Section 24)', () => {
       event: 'MAN_DOWN',
       gas: 315,
       imuState: 'IMMOBILE',
-      rssi: -95, // weak link
+      rssi: -95,
       snr: 4.2,
     };
 
     const res = processPacketAgainstWorker(manDownWorker, packet, 130000, '12:03:00');
     assert.equal(res.updatedWorker.state, 'MAN_DOWN');
     assert.equal(res.updatedWorker.rssi, -95);
+  });
+
+  it('4. Deep subterranean RF fade retains telemetry without crash', () => {
+    const worker = createMockWorker();
+    const packet: RawPacket = {
+      workerId: 'WORKER_01',
+      event: 'NORMAL',
+      gas: 320,
+      rssi: -118, // extremely weak signal
+      snr: -6.5,
+    };
+
+    const res = processPacketAgainstWorker(worker, packet, 140000, '12:04:00');
+    assert.equal(res.updatedWorker.rssi, -118);
+    assert.equal(res.updatedWorker.snr, -6.5);
+    assert.equal(res.updatedWorker.state, 'NORMAL');
   });
 });

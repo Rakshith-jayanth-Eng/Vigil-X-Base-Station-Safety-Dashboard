@@ -28,6 +28,7 @@ function createMockWorker(overrides: Partial<WorkerNode> = {}): WorkerNode {
     packetCount: 1,
     lastPacketTime: 100000,
     lastPacketFormatted: '12:00:00',
+    telemetryHistory: [],
     isAcknowledged: false,
     ...overrides,
   };
@@ -35,8 +36,7 @@ function createMockWorker(overrides: Partial<WorkerNode> = {}): WorkerNode {
 
 describe('MPU6050 Motion & Man-Down State Machine Audit', () => {
   it('1. Normal walking and motion is detected as active motion without false fall', () => {
-    // Normal walking produces dynamic acceleration around 1G and slight angular rate
-    const walkingAccel = { x: -0.15, y: 1.35, z: 0.2 }; // ~1.37g total magnitude (>0.25g delta)
+    const walkingAccel = { x: -0.15, y: 1.35, z: 0.2 };
     const walkingGyro = { x: 12, y: -5, z: 8 };
 
     assert.equal(isMotionActive(walkingAccel, walkingGyro), true);
@@ -58,7 +58,6 @@ describe('MPU6050 Motion & Man-Down State Machine Audit', () => {
   });
 
   it('2. Temporary stationary pause does NOT trigger fall or emergency', () => {
-    // Worker stops to read a gauge or hold a pipe. Still upright under 1G earth gravity.
     const stationaryAccel = { x: 0.01, y: 0.99, z: 0.02 };
     const stationaryGyro = { x: 0, y: 0, z: 0 };
 
@@ -87,7 +86,7 @@ describe('MPU6050 Motion & Man-Down State Machine Audit', () => {
       event: 'POSSIBLE_FALL',
       gas: 310,
       imuState: 'POSSIBLE_FALL',
-      accel: { x: 0.8, y: 2.5, z: -1.2 }, // High-g impact
+      accel: { x: 0.8, y: 2.5, z: -1.2 },
       gyro: { x: 150, y: -80, z: 45 },
     };
 
@@ -97,14 +96,12 @@ describe('MPU6050 Motion & Man-Down State Machine Audit', () => {
     assert.equal(res.shouldTriggerAlarm, true);
     assert.equal(res.alarmType, 'WARNING');
 
-    // Event log generated
     const fallEvent = res.newEvents.find((e) => e.eventType === 'POSSIBLE_FALL');
     assert.ok(fallEvent, 'Must generate a POSSIBLE_FALL warning event');
     assert.equal(fallEvent.severity, 'WARNING');
   });
 
   it('4. False alarm recovery: worker gets back up before timeout, resetting to NORMAL', () => {
-    // Worker was in POSSIBLE_FALL with timer started
     const workerInFall = createMockWorker({
       state: 'POSSIBLE_FALL',
       manDownStep: 'IMMOBILITY_TIMER',
@@ -112,7 +109,6 @@ describe('MPU6050 Motion & Man-Down State Machine Audit', () => {
       fallDetectedTime: 103000,
     });
 
-    // Arduino sends NORMAL recovery packet because motion resumed
     const recoveryPacket: RawPacket = {
       workerId: 'WORKER_01',
       event: 'NORMAL',
@@ -139,13 +135,12 @@ describe('MPU6050 Motion & Man-Down State Machine Audit', () => {
       immobilitySeconds: 9,
     });
 
-    // Arduino times out at 10s and transmits MAN_DOWN packet
     const manDownPacket: RawPacket = {
       workerId: 'WORKER_01',
       event: 'MAN_DOWN',
       gas: 318,
       imuState: 'IMMOBILE',
-      accel: { x: 0.05, y: 0.08, z: 0.99 }, // Horizontal on ground
+      accel: { x: 0.05, y: 0.08, z: 0.99 },
       gyro: { x: 0, y: 0, z: 0 },
     };
 
@@ -172,7 +167,7 @@ describe('MPU6050 Motion & Man-Down State Machine Audit', () => {
     const compoundPacket: RawPacket = {
       workerId: 'WORKER_01',
       event: 'COMPOUND_HAZARD',
-      gas: 780, // Toxic methane > 500
+      gas: 780,
       imuState: 'IMMOBILE',
       accel: { x: 0.02, y: 0.05, z: 0.99 },
     };
@@ -189,7 +184,6 @@ describe('MPU6050 Motion & Man-Down State Machine Audit', () => {
   });
 
   it('7. Operator acknowledgement does NOT clear physical emergency state', () => {
-    // When operator clicks Acknowledge, state must stay MAN_DOWN until real recovery or physical reset
     const worker = createMockWorker({
       state: 'MAN_DOWN',
       manDownStep: 'MAN_DOWN',
@@ -197,7 +191,6 @@ describe('MPU6050 Motion & Man-Down State Machine Audit', () => {
       acknowledgedBy: 'BASE_OPERATOR_1',
     });
 
-    // Another heartbeat packet arrives with MAN_DOWN
     const packet: RawPacket = {
       workerId: 'WORKER_01',
       event: 'MAN_DOWN',
@@ -207,7 +200,11 @@ describe('MPU6050 Motion & Man-Down State Machine Audit', () => {
 
     const res = processPacketAgainstWorker(worker, packet, 118000, '12:06:00');
     assert.equal(res.updatedWorker.state, 'MAN_DOWN');
-    // Does not falsely clear back to NORMAL
     assert.notEqual(res.updatedWorker.state, 'NORMAL');
+  });
+
+  it('8. Vector magnitude calculates accurately across positive and negative axes', () => {
+    const mag = vectorMagnitude({ x: -0.6, y: 0.8, z: 0 });
+    assert.equal(Math.round(mag * 10) / 10, 1.0);
   });
 });

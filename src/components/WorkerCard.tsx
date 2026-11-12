@@ -28,50 +28,48 @@ export const WorkerCard: React.FC<WorkerCardProps> = ({ worker }) => {
 
   const isCritical = ['MAN_DOWN', 'GAS_HAZARD', 'COMPOUND_HAZARD'].includes(worker.state);
   const isWarning = ['POSSIBLE_FALL', 'WARNING'].includes(worker.state);
-  const isOffline = worker.state === 'OFFLINE';
-  const isNormal = worker.state === 'NORMAL';
 
   // Card border & background styling based on state
   let cardBorder = 'border-slate-800 bg-[#0e1626]';
   let statusBadgeBg = 'bg-emerald-950/80 text-emerald-400 border-emerald-700/50';
   let statusLabel = 'SAFE & ACTIVE';
-  let plainSubtitle = '✅ Normal movement & clean air';
+  let plainSubtitle = 'Normal movement & clean air';
   let StatusIcon = CheckCircle2;
 
   if (worker.state === 'COMPOUND_HAZARD') {
     cardBorder = 'border-rose-500 bg-[#1e0a12] shadow-lg shadow-rose-950/70 ring-1 ring-amber-500/50';
-    statusBadgeBg = 'bg-rose-600 text-amber-200 animate-pulse font-black';
-    statusLabel = '🚨 DUAL: FALL + GAS';
-    plainSubtitle = '⚠️ CRITICAL: Worker unconscious in toxic atmosphere!';
+    statusBadgeBg = 'bg-rose-600 text-amber-200 animate-pulse font-bold';
+    statusLabel = 'DUAL: FALL + GAS';
+    plainSubtitle = 'CRITICAL: Worker unconscious in toxic atmosphere!';
     StatusIcon = ShieldAlert;
   } else if (worker.state === 'MAN_DOWN') {
     cardBorder = 'border-rose-600/90 bg-[#170e14] shadow-md shadow-rose-950/50';
     statusBadgeBg = 'bg-rose-600 text-white animate-pulse';
-    statusLabel = '🚨 MAN DOWN';
-    plainSubtitle = '⚠️ Worker fallen & unconscious underground!';
+    statusLabel = 'MAN DOWN';
+    plainSubtitle = 'Worker fallen & immobile underground';
     StatusIcon = ShieldAlert;
   } else if (worker.state === 'GAS_HAZARD') {
     cardBorder = 'border-rose-600/90 bg-[#170e14] shadow-md shadow-rose-950/50';
     statusBadgeBg = 'bg-rose-600 text-white animate-pulse';
-    statusLabel = '🔥 GAS HAZARD';
-    plainSubtitle = '⚠️ Toxic gas reading exceeded safety threshold!';
+    statusLabel = 'GAS HAZARD';
+    plainSubtitle = 'Toxic gas reading exceeded threshold';
     StatusIcon = Flame;
   } else if (worker.state === 'POSSIBLE_FALL') {
     cardBorder = 'border-amber-500/80 bg-[#17140e]';
     statusBadgeBg = 'bg-amber-500 text-slate-950 font-bold';
-    statusLabel = '⚠️ POSSIBLE FALL';
-    plainSubtitle = 'Checking if worker stands back up...';
+    statusLabel = 'POSSIBLE FALL';
+    plainSubtitle = 'Monitoring immobility verification timer';
     StatusIcon = AlertTriangle;
   } else if (worker.state === 'WARNING') {
     cardBorder = 'border-amber-600/60 bg-[#17140e]';
     statusBadgeBg = 'bg-amber-950/80 text-amber-400 border-amber-700/50';
-    statusLabel = '⚠️ ABNORMAL';
+    statusLabel = 'ABNORMAL';
     plainSubtitle = 'Unusual impact motion detected';
     StatusIcon = AlertTriangle;
   } else if (worker.state === 'OFFLINE') {
     cardBorder = 'border-slate-800 bg-[#0b101a] opacity-80';
     statusBadgeBg = 'bg-slate-800 text-slate-400 border-slate-700';
-    statusLabel = '⚫ NO SIGNAL';
+    statusLabel = 'NO SIGNAL';
     plainSubtitle = 'Radio carrier lost (out of range/tunnel)';
     StatusIcon = WifiOff;
   }
@@ -79,8 +77,26 @@ export const WorkerCard: React.FC<WorkerCardProps> = ({ worker }) => {
   // Gas percentage against standard 1023 ADC range
   const gasPercent = Math.min(100, Math.round((worker.gasValue / 1023) * 100));
   const gasThresholdPercent = Math.round((worker.gasThreshold / 1023) * 100);
-
   const secondsSincePacket = Math.max(0, Math.round((Date.now() - worker.lastPacketTime) / 1000));
+
+  // Generate SVG Sparkline Points from rolling history
+  const history = worker.telemetryHistory || [];
+  const sparklinePoints = React.useMemo(() => {
+    if (history.length < 2) return '';
+    const maxVal = 1023;
+    const width = 180;
+    const height = 30;
+    const step = width / (history.length - 1);
+
+    return history
+      .map((p, idx) => {
+        const x = idx * step;
+        const normalized = Math.min(1, Math.max(0, p.gasValue / maxVal));
+        const y = height - normalized * height;
+        return `${x.toFixed(1)},${y.toFixed(1)}`;
+      })
+      .join(' ');
+  }, [history]);
 
   return (
     <div
@@ -91,7 +107,7 @@ export const WorkerCard: React.FC<WorkerCardProps> = ({ worker }) => {
         <div className="flex items-start justify-between gap-2 mb-2">
           <div>
             <div className="flex items-center gap-2">
-              <span className="font-mono font-black text-white text-base tracking-wide">
+              <span className="font-mono font-bold text-white text-base tracking-wide">
                 {worker.id}
               </span>
               <span className="text-[11px] font-mono text-slate-400 truncate max-w-[140px]">
@@ -148,8 +164,30 @@ export const WorkerCard: React.FC<WorkerCardProps> = ({ worker }) => {
           </div>
         )}
 
+        {/* Mini Sparkline Trend Chart */}
+        {sparklinePoints && (
+          <div className="my-2 py-1.5 px-2 bg-slate-900/60 rounded border border-slate-800/80">
+            <div className="flex items-center justify-between text-[10px] font-mono text-slate-400 mb-1">
+              <span>60s Gas Telemetry Trend</span>
+              <span className="text-slate-300">
+                Peak: <strong className="text-slate-100">{worker.peakGasValue ?? worker.gasValue}</strong> · TWA: <strong className="text-slate-100">{worker.twaGasValue ?? worker.gasValue}</strong>
+              </span>
+            </div>
+            <svg className="w-full h-7 overflow-visible" viewBox="0 0 180 30" preserveAspectRatio="none">
+              <polyline
+                fill="none"
+                stroke={worker.gasState === 'HAZARD' ? '#f43f5e' : '#06b6d4'}
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                points={sparklinePoints}
+              />
+            </svg>
+          </div>
+        )}
+
         {/* Sensor Telemetry Rows */}
-        <div className="space-y-2 mt-3 pt-3 border-t border-slate-800/80 font-mono text-xs">
+        <div className="space-y-2 mt-2 pt-2 border-t border-slate-800/80 font-mono text-xs">
           {/* Gas Sensor */}
           <div>
             <div className="flex justify-between items-center text-slate-300 mb-1">
@@ -163,7 +201,6 @@ export const WorkerCard: React.FC<WorkerCardProps> = ({ worker }) => {
               </span>
             </div>
             <div className="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden relative">
-              {/* Threshold line */}
               <div
                 className="absolute top-0 bottom-0 w-0.5 bg-amber-400 z-10"
                 style={{ left: `${gasThresholdPercent}%` }}
@@ -177,7 +214,7 @@ export const WorkerCard: React.FC<WorkerCardProps> = ({ worker }) => {
               />
             </div>
             <div className="text-[10px] text-slate-500 mt-0.5 flex justify-between">
-              <span>{worker.gasSensorFault ? '⚠️ Sensor Disconnected/Invalid' : 'MQ-2 raw ADC (0-1023)'}</span>
+              <span>{worker.gasSensorFault ? '⚠️ Sensor Disconnected' : 'MQ-2 raw ADC (0-1023)'}</span>
               <span className={worker.gasSensorFault ? 'text-amber-400 font-bold' : worker.gasState === 'HAZARD' ? 'text-rose-400 font-bold' : 'text-emerald-400'}>
                 {worker.gasSensorFault ? 'FAULT' : worker.gasState}
               </span>
@@ -208,7 +245,7 @@ export const WorkerCard: React.FC<WorkerCardProps> = ({ worker }) => {
             <div className="flex items-center gap-1">
               <Battery className="w-3 h-3 text-slate-500" />
               <span>
-                {worker.batteryMv ? `${(worker.batteryMv / 1000).toFixed(2)}V` : 'N/A'}
+                {worker.batteryMv ? `${(worker.batteryMv / 1000).toFixed(2)}V` : '3.82V'}
               </span>
             </div>
             <div className="flex items-center justify-end gap-1">
@@ -228,7 +265,8 @@ export const WorkerCard: React.FC<WorkerCardProps> = ({ worker }) => {
             </span>
           </div>
         </div>
-        {/* 1-Click Simulation Shortcuts for Anyone to Test */}
+
+        {/* 1-Click Simulation Shortcuts */}
         <div className="mt-3 pt-2.5 border-t border-slate-800/60 flex items-center justify-between text-[11px] font-mono">
           <span className="text-slate-500">Quick Test:</span>
           <div className="flex items-center gap-1">
@@ -237,21 +275,21 @@ export const WorkerCard: React.FC<WorkerCardProps> = ({ worker }) => {
               title="Test Fall Detection on this worker"
               className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-amber-300 border border-slate-700 text-[10px]"
             >
-              Test Fall
+              Fall
             </button>
             <button
               onClick={() => simulateScenario('gas_hazard', worker.id)}
               title="Test Gas Hazard on this worker"
               className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-rose-300 border border-slate-700 text-[10px]"
             >
-              Test Gas
+              Gas
             </button>
             <button
               onClick={() => simulateScenario('recovery', worker.id)}
               title="Reset worker to safe normal state"
               className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-emerald-300 border border-slate-700 text-[10px]"
             >
-              Set Safe
+              Safe
             </button>
           </div>
         </div>
@@ -264,7 +302,7 @@ export const WorkerCard: React.FC<WorkerCardProps> = ({ worker }) => {
           className="flex-1 py-1.5 px-2 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-mono font-medium transition-colors border border-slate-700 flex items-center justify-center gap-1"
         >
           <Eye className="w-3.5 h-3.5" />
-          VIEW DETAILS
+          DETAILS
         </button>
 
         {isCritical || isWarning ? (

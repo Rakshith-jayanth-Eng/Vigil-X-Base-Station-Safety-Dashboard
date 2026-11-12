@@ -7,6 +7,7 @@ describe('LoRa Serial Packet Parser Audit (Section 7)', () => {
     const raw = '{"workerId":"WORKER_01","event":"MAN_DOWN","gas":340,"imuState":"IMMOBILE","rssi":-85,"snr":7.2}';
     const res = parsePacketLine(raw);
     assert.equal(res.success, true);
+    assert.equal(res.ok, true);
     assert.ok(res.packet);
     assert.equal(res.packet.workerId, 'WORKER_01');
     assert.equal(res.packet.event, 'MAN_DOWN');
@@ -78,6 +79,7 @@ describe('LoRa Serial Packet Parser Audit (Section 7)', () => {
     const raw = '{"workerId":"WORKER_01","event":...BROKEN_JSON';
     const res = parsePacketLine(raw);
     assert.equal(res.success, false);
+    assert.equal(res.ok, false);
     assert.match(res.error || '', /Malformed JSON/i);
   });
 
@@ -94,5 +96,40 @@ describe('LoRa Serial Packet Parser Audit (Section 7)', () => {
     assert.equal(res.success, true);
     assert.ok(res.packet);
     assert.equal(res.packet.sensorFault, true);
+  });
+
+  it('10. Edge Case: Handles prompt-specified JSON format with gas_value, gas_hazard, motion_state, alert', () => {
+    const raw = '{"worker_id":"WORKER_01","gas_value":245,"gas_hazard":false,"motion_state":"NORMAL","alert":"NONE"}';
+    const res = parsePacketLine(raw);
+    assert.equal(res.success, true);
+    assert.ok(res.packet);
+    assert.equal(res.packet.workerId, 'WORKER_01');
+    assert.equal(res.packet.gas, 245);
+    assert.equal(res.packet.event, 'NORMAL');
+  });
+
+  it('11. Edge Case: Protects against Infinity / -Infinity payloads', () => {
+    // Quoted string Infinity is sanitized to NaN
+    const rawStr = '{"workerId":"WORKER_01","event":"NORMAL","gas":"Infinity","rssi":"-Infinity"}';
+    const resStr = parsePacketLine(rawStr);
+    assert.equal(resStr.success, true);
+    assert.ok(resStr.packet);
+    assert.ok(Number.isNaN(resStr.packet.gas));
+    assert.equal(resStr.packet.rssi, -80); // Fallback to -80 for non-finite RSSI
+
+    // Unquoted Infinity is rejected gracefully by JSON parser without crashing
+    const rawUnquoted = '{"workerId":"WORKER_01","event":"NORMAL","gas":Infinity}';
+    const resUnquoted = parsePacketLine(rawUnquoted);
+    assert.equal(resUnquoted.success, false);
+    assert.match(resUnquoted.error || '', /Malformed JSON/i);
+  });
+
+  it('12. Edge Case: Tolerates extra spaces and lowercase worker IDs', () => {
+    const raw = '   {"workerId":"worker_99","event":"normal","gas":320}   ';
+    const res = parsePacketLine(raw);
+    assert.equal(res.success, true);
+    assert.ok(res.packet);
+    assert.equal(res.packet.workerId, 'WORKER_99');
+    assert.equal(res.packet.event, 'NORMAL');
   });
 });
