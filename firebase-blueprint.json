@@ -1,0 +1,62 @@
+{
+  "entities": {
+    "safetyAlert": {
+      "title": "Safety Alert",
+      "description": "Hazard and emergency events detected by worker nodes or base station",
+      "type": "object",
+      "properties": {
+        "workerId": { "type": "string" },
+        "alertType": { "type": "string", "enum": ["GAS_HAZARD", "MAN_DOWN", "NONE"] },
+        "gasValue": { "type": "number" },
+        "motionState": { "type": "string" },
+        "timestamp": { "type": "number" },
+        "resolved": { "type": "boolean" },
+        "notes": { "type": "string" },
+        "createdBy": { "type": "string" }
+      },
+      "required": ["workerId", "alertType", "timestamp", "createdBy"]
+    },
+    "voiceIncidentNote": {
+      "title": "Voice Incident Note",
+      "description": "Audio transcribed field notes and safety incident reports",
+      "type": "object",
+      "properties": {
+        "workerId": { "type": "string" },
+        "transcription": { "type": "string" },
+        "audioDurationSec": { "type": "number" },
+        "timestamp": { "type": "number" },
+        "authorId": { "type": "string" },
+        "authorEmail": { "type": "string" }
+      },
+      "required": ["transcription", "timestamp", "authorId"]
+    },
+    "chemicalHazard": {
+      "title": "Chemical Hazard Reference",
+      "description": "PubChem toxicology and chemical safety references for detected industrial gases",
+      "type": "object",
+      "properties": {
+        "cid": { "type": "number" },
+        "name": { "type": "string" },
+        "formula": { "type": "string" },
+        "molecularWeight": { "type": "string" },
+        "ghsClassification": { "type": "string" },
+        "updatedAt": { "type": "number" }
+      },
+      "required": ["cid", "name", "formula"]
+    }
+  },
+  "firestore": {
+    "/safety_alerts/{alertId}": {
+      "schema": "safetyAlert",
+      "description": "Active and historical safety alert records logged by safety operators"
+    },
+    "/voice_notes/{noteId}": {
+      "schema": "voiceIncidentNote",
+      "description": "Transcribed voice incident logs recorded by supervisors"
+    },
+    "/chemical_hazards/{hazardId}": {
+      "schema": "chemicalHazard",
+      "description": "Cached scientific data from PubChem for toxic and combustible gases"
+    }
+  }
+}

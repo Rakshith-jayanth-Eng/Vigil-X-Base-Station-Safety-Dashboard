@@ -1,0 +1,7 @@
+{
+  "name": "Vigil-X Base Station Safety Dashboard",
+  "description": "Infrastructure-independent real-time worker safety monitoring interface for hazardous environments with LoRa telemetry, man-down state machine, gas hazard detection, and live/demo modes.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+
