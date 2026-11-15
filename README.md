@@ -43,3 +43,56 @@ Industrial, underground, and remote field workers often operate in dead zones wh
                     ▼                               ▼
         React + Tailwind Dashboard        Firebase / Event Timeline
         (WorkerCards, Alerts, Simulator)  (Audit Logs & Incident State)
+```
+
+---
+
+## Tech Stack
+
+* **Frontend:** React 19, TypeScript, Vite 8, Tailwind CSS v4, Motion, Lucide Icons
+* **Backend / Services:** Express, Firebase / Firestore, Google Gemini API (`@google/genai`), PubChem API
+* **Testing:** Node / `tsx --test` unit test suite
+* **Target Hardware:** STM32 (`STM32F446RE`) / Arduino, Semtech SX1278 LoRa (433 MHz), MQ-2 Gas Sensor, MPU6050 IMU, Neo-6M GPS
+
+---
+
+## Project Structure
+
+```text
+├── src/
+│   ├── components/       # Dashboard UI (WorkerCard, EmergencyAlertBanner, InteractiveSimulator, EventTimeline)
+│   ├── config/           # Firebase configuration
+│   ├── context/          # SafetySystemContext global state
+│   ├── logic/            # safetyEngine.ts (gas hysteresis, ADC fault checks, man-down FSM)
+│   ├── services/         # pubchemService.ts
+│   ├── types/            # TypeScript interfaces for packets, workers, and events
+│   └── utils/            # packetParser.ts & audio alert utilities
+├── tests/                # Unit tests (packetParser, gasHazard, fallDetectionManDown, offlineAndCommunication)
+├── .env.example          # Environment variable template
+└── package.json
+```
+
+---
+
+## Getting Started
+
+```bash
+npm install
+cp .env.example .env   # Add your GEMINI_API_KEY and APP_URL
+npm run dev            # Starts the dashboard at http://localhost:3000
+```
+
+Use the built-in **Interactive Simulator** to test man-down, gas hazard, and offline alerts without connected hardware.
+
+### Tests & Typecheck
+
+```bash
+npm test      # Runs all 4 safety & parser test suites (tsx --test)
+npm run lint  # Runs TypeScript type-checking (tsc --noEmit)
+```
+
+---
+
+## License
+
+This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
